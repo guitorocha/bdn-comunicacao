@@ -1,5 +1,5 @@
 import {
-  type User, type InsertUser,
+  type User, type InsertUser, type AdminCreateUser,
   type Request, type InsertRequest,
   type Subtask, type InsertSubtask,
   type Comment, type InsertComment,
@@ -10,6 +10,10 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
+  createUserAdmin(user: AdminCreateUser): Promise<User>;
+  getAllUsers(): Promise<User[]>;
+  deleteUser(id: number): Promise<boolean>;
+  updateUserAdmin(id: number, isAdmin: boolean): Promise<User | undefined>;
   // Requests
   getRequest(id: number): Promise<Request | undefined>;
   getAllRequests(): Promise<Request[]>;
@@ -37,16 +41,18 @@ export class MemStorage implements IStorage {
   private nextCommentId = 1;
 
   constructor() {
-    // Seed an admin user
-    this.createUser({
+    // Seed users
+    this.createUserAdmin({
       username: "admin",
       password: "bdn2026",
       displayName: "Administrador",
+      isAdmin: true,
     });
-    this.createUser({
+    this.createUserAdmin({
       username: "comunicacao",
       password: "comunica2026",
       displayName: "Equipe Comunicação",
+      isAdmin: false,
     });
   }
 
@@ -61,7 +67,30 @@ export class MemStorage implements IStorage {
 
   async createUser(data: InsertUser): Promise<User> {
     const id = this.nextUserId++;
-    const user: User = { id, ...data };
+    const user: User = { id, ...data, isAdmin: false };
+    this.users.set(id, user);
+    return user;
+  }
+
+  async createUserAdmin(data: AdminCreateUser): Promise<User> {
+    const id = this.nextUserId++;
+    const user: User = { id, ...data, isAdmin: data.isAdmin ?? false };
+    this.users.set(id, user);
+    return user;
+  }
+
+  async getAllUsers(): Promise<User[]> {
+    return Array.from(this.users.values());
+  }
+
+  async deleteUser(id: number): Promise<boolean> {
+    return this.users.delete(id);
+  }
+
+  async updateUserAdmin(id: number, isAdmin: boolean): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    user.isAdmin = isAdmin;
     this.users.set(id, user);
     return user;
   }

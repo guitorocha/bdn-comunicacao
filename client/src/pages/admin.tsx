@@ -13,7 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   ArrowLeft, Calendar, CheckCircle2, ChevronRight, Circle, Clock,
-  Hash, LogOut, MessageSquare, Plus, Send, Trash2, User
+  Hash, LogOut, MessageSquare, Plus, Send, Trash2, User, Users
 } from "lucide-react";
 import { Link, useLocation, Redirect } from "wouter";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
@@ -59,9 +59,18 @@ export default function Admin() {
               <p className="text-xs text-muted-foreground">Olá, {user?.displayName}</p>
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => { logout(); navigate("/"); }} data-testid="button-logout">
-            <LogOut className="w-4 h-4 mr-1" /> Sair
-          </Button>
+          <div className="flex items-center gap-2">
+            {user?.isAdmin && (
+              <Link href="/usuarios">
+                <Button variant="outline" size="sm" data-testid="button-manage-users">
+                  <Users className="w-4 h-4 mr-1" /> Usuários
+                </Button>
+              </Link>
+            )}
+            <Button variant="ghost" size="sm" onClick={() => { logout(); navigate("/"); }} data-testid="button-logout">
+              <LogOut className="w-4 h-4 mr-1" /> Sair
+            </Button>
+          </div>
         </div>
       </header>
 

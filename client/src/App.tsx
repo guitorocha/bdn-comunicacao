@@ -8,6 +8,7 @@ import Home from "@/pages/home";
 import Tracking from "@/pages/tracking";
 import Login from "@/pages/login";
 import Admin from "@/pages/admin";
+import UsersPage from "@/pages/users";
 import NotFound from "@/pages/not-found";
 
 function AppRouter() {
@@ -17,6 +18,7 @@ function AppRouter() {
       <Route path="/acompanhar" component={Tracking} />
       <Route path="/login" component={Login} />
       <Route path="/admin" component={Admin} />
+      <Route path="/usuarios" component={UsersPage} />
       <Route component={NotFound} />
     </Switch>
   );

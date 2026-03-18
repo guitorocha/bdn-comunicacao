@@ -8,11 +8,16 @@ export const users = pgTable("users", {
   username: text("username").notNull().unique(),
   password: text("password").notNull(),
   displayName: text("display_name").notNull(),
+  isAdmin: boolean("is_admin").notNull().default(false),
 });
 
-export const insertUserSchema = createInsertSchema(users).omit({ id: true });
+export const insertUserSchema = createInsertSchema(users).omit({ id: true, isAdmin: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
+
+// Schema for admin-created users (allows setting isAdmin)
+export const adminCreateUserSchema = createInsertSchema(users).omit({ id: true });
+export type AdminCreateUser = z.infer<typeof adminCreateUserSchema>;
 
 // Content requests
 export const requests = pgTable("requests", {

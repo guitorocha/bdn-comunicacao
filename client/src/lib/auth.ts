@@ -4,6 +4,7 @@ interface AuthUser {
   id: number;
   username: string;
   displayName: string;
+  isAdmin: boolean;
 }
 
 let currentUser: AuthUser | null = null;

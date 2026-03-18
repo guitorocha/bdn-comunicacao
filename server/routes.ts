@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema } from "@shared/schema";
+import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema } from "@shared/schema";
 import { z } from "zod";
 
 export async function registerRoutes(
@@ -20,7 +20,55 @@ export async function registerRoutes(
       return res.status(401).json({ message: "Credenciais inválidas" });
     }
     // Return user info (no sessions needed — simple token-less auth for prototype)
-    return res.json({ id: user.id, username: user.username, displayName: user.displayName });
+    return res.json({ id: user.id, username: user.username, displayName: user.displayName, isAdmin: user.isAdmin });
+  });
+
+  // ── Users (admin only) ──
+
+  app.get("/api/users", async (_req, res) => {
+    const users = await storage.getAllUsers();
+    // Don't send passwords to the client
+    const safeUsers = users.map(({ password, ...rest }) => rest);
+    return res.json(safeUsers);
+  });
+
+  app.post("/api/users", async (req, res) => {
+    try {
+      const data = adminCreateUserSchema.parse(req.body);
+      // Check if username already exists
+      const existing = await storage.getUserByUsername(data.username);
+      if (existing) {
+        return res.status(409).json({ message: "Já existe um usuário com esse nome de usuário" });
+      }
+      const user = await storage.createUserAdmin(data);
+      const { password, ...safeUser } = user;
+      return res.status(201).json(safeUser);
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        return res.status(400).json({ message: "Dados inválidos", errors: err.errors });
+      }
+      throw err;
+    }
+  });
+
+  app.delete("/api/users/:id", async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+    const deleted = await storage.deleteUser(id);
+    if (!deleted) return res.status(404).json({ message: "Usuário não encontrado" });
+    return res.json({ success: true });
+  });
+
+  app.patch("/api/users/:id/admin", async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const { isAdmin } = req.body;
+    if (typeof isAdmin !== "boolean") {
+      return res.status(400).json({ message: "Campo isAdmin deve ser boolean" });
+    }
+    const updated = await storage.updateUserAdmin(id, isAdmin);
+    if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+    const { password, ...safeUser } = updated;
+    return res.json(safeUser);
   });
 
   // ── Requests ──
