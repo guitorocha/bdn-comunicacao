@@ -4,4 +4,13 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
-.terraform
+
+# Terraform
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.*
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
