@@ -182,4 +182,8 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+import { DynamoStorage } from "./storage-dynamo";
+
+export const storage = process.env.NODE_ENV === "production"
+  ? new DynamoStorage()   // Lambda + DynamoDB
+  : new MemStorage();     // Dev local (sem AWS)

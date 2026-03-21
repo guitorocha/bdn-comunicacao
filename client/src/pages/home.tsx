@@ -338,11 +338,13 @@ export default function Home() {
 
 function BdnLogo() {
   return (
-    <svg width="36" height="36" viewBox="0 0 36 36" fill="none" aria-label="Bola de Neve Church">
-      <rect width="36" height="36" rx="8" fill="hsl(var(--primary))" />
-      <text x="50%" y="52%" dominantBaseline="middle" textAnchor="middle" fill="white" fontFamily="Montserrat, sans-serif" fontWeight="900" fontSize="10">
-        BDN
-      </text>
-    </svg>
+    <img
+      src="/logo-bdn.png"
+      alt="Bola de Neve Church"
+      width={100}        // ← aumente conforme necessário (era 36)
+      height={22}        // ← ajuste para a proporção real do seu logo
+      className="object-contain"   // ← mantém proporção sem cortar
+      style={{ borderRadius: 0 }}  // ← remove os cantos arredondados
+    />
   );
 }

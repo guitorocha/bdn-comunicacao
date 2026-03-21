@@ -59,6 +59,32 @@ async function buildAll() {
     external: externals,
     logLevel: "info",
   });
+
+  console.log("building lambda bundle...");
+
+  const lambdaExternals = externals.filter(
+  (dep) => dep !== "@vendia/serverless-express"
+  );
+  
+  await esbuild({
+    entryPoints: ["server/lambda.ts"],
+    platform: "node",
+    target: "node20",
+    bundle: true,
+    format: "cjs",
+    outfile: "dist/lambda.js",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: [
+      // AWS SDK já vem pré-instalado no ambiente Lambda — não precisa no ZIP
+      "@aws-sdk/client-dynamodb",
+      "@aws-sdk/lib-dynamodb",
+      ...lambdaExternals,
+    ],
+    logLevel: "info",
+  });
 }
 
 buildAll().catch((err) => {
