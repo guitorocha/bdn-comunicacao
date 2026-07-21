@@ -45,7 +45,8 @@ dist
 .vuepress/dist
 
 # Terraform
-.terraform/*
+.terraform/
+infra/.terraform/
 .terraform.lock.hcl
 terraform.tfstate
 terraform.tfstate.*
@@ -53,3 +54,5 @@ crash.log
 crash.*.log
 *.tfvars
 *.tfvars.json
+infra/terraform.tfstate*
+infra/terraform.tfstate.backup
