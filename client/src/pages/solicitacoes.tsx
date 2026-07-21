@@ -130,9 +130,13 @@ export default function Solicitacoes() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar subtitle="Solicitação de Divulgação" />
+      <Navbar />
 
       <main className="max-w-3xl mx-auto px-4 py-8">
+        <div className="mb-6">
+          <h1 className="text-lg font-bold uppercase tracking-wider">Solicitação de Divulgação</h1>
+        </div>
+
         {/* Team shortcut to the management panel */}
         {isAuthenticated && (
           <Link href="/solicitacoes/painel">

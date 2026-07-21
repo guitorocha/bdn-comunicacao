@@ -49,7 +49,7 @@ export default function Escalas() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar subtitle="Escalas de Voluntários" />
+      <Navbar />
 
       <main className="max-w-6xl mx-auto px-4 py-6">
         {!isAuthenticated ? (
@@ -57,9 +57,9 @@ export default function Escalas() {
         ) : (
           <>
             <div className="flex items-center justify-between gap-4 flex-wrap mb-6">
-              <h2 className="text-lg font-bold uppercase tracking-wider flex items-center gap-2">
+              <h1 className="text-lg font-bold uppercase tracking-wider flex items-center gap-2">
                 <CalendarDays className="w-5 h-5 text-primary" /> Escalas
-              </h2>
+              </h1>
               {isAdmin && (
                 <Tabs value={view} onValueChange={(v) => setView(v as "voluntario" | "admin")}>
                   <TabsList data-testid="tabs-escalas-view">

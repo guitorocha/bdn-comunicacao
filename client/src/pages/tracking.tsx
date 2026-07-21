@@ -77,9 +77,13 @@ export default function Tracking() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar subtitle="Acompanhamento de Solicitação" />
+      <Navbar />
 
       <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
+        <div className="mb-2">
+          <h1 className="text-lg font-bold uppercase tracking-wider">Acompanhamento de Solicitação</h1>
+        </div>
+
         {/* Search */}
         <Card className="p-6">
           <div className="space-y-2">

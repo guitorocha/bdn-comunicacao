@@ -31,7 +31,7 @@ export function BdnLogo() {
   );
 }
 
-export function Navbar({ subtitle }: { subtitle?: string }) {
+export function Navbar() {
   const [location, navigate] = useLocation();
   const { user, isAuthenticated, logout } = useAuth();
 
@@ -52,19 +52,18 @@ export function Navbar({ subtitle }: { subtitle?: string }) {
 
   return (
     <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-      <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
+      <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
         <Link href="/">
-          <div className="flex items-center gap-3 cursor-pointer">
+          <div className="flex flex-col items-start gap-1 cursor-pointer shrink-0">
             <BdnLogo />
-            <div>
-              <h1 className="text-sm font-bold uppercase tracking-wider">Comunicação</h1>
-              <p className="text-xs text-muted-foreground">{subtitle ?? "Ministério de Comunicação"}</p>
-            </div>
+            <span className="text-[11px] font-bold uppercase tracking-wider leading-none">
+              Comunicação
+            </span>
           </div>
         </Link>
 
         {/* Desktop nav */}
-        <nav className="hidden md:flex items-center gap-1">
+        <nav className="hidden lg:flex items-center gap-1 shrink-0">
           {NAV_LINKS.map(({ href, label }) => (
             <Link key={href} href={href}>
               <Button
@@ -130,7 +129,7 @@ export function Navbar({ subtitle }: { subtitle?: string }) {
         </nav>
 
         {/* Mobile nav */}
-        <div className="md:hidden">
+        <div className="lg:hidden shrink-0">
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" data-testid="button-mobile-menu">

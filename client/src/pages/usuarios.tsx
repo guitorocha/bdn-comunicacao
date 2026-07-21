@@ -22,11 +22,11 @@ export default function UsuariosPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar subtitle="Meus Dados" />
+      <Navbar />
 
       <main className="max-w-2xl mx-auto px-4 py-6 space-y-6">
         <div>
-          <h2 className="text-lg font-bold uppercase tracking-wider">Meus Dados</h2>
+          <h1 className="text-lg font-bold uppercase tracking-wider">Meus Dados</h1>
           <p className="text-sm text-muted-foreground">
             Mantenha seu cadastro e sua senha atualizados.
           </p>

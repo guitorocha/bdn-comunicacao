@@ -66,11 +66,11 @@ export default function EquipesPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar subtitle="Gerenciar Equipes" />
+      <Navbar />
 
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
         <div>
-          <h2 className="text-lg font-bold uppercase tracking-wider">Gerenciar Equipes</h2>
+          <h1 className="text-lg font-bold uppercase tracking-wider">Gerenciar Equipes</h1>
           <p className="text-sm text-muted-foreground">Criar, remover e configurar acessos da equipe.</p>
         </div>
         <CreateUserForm />

@@ -47,11 +47,11 @@ export default function Painel() {
 
   return (
     <div className="min-h-screen bg-background">
-      <Navbar subtitle="Painel de Solicitações" />
+      <Navbar />
 
       <main className="max-w-6xl mx-auto px-4 py-6">
         <div className="mb-6">
-          <h2 className="text-lg font-bold uppercase tracking-wider">Painel de Solicitações</h2>
+          <h1 className="text-lg font-bold uppercase tracking-wider">Painel de Solicitações</h1>
           <p className="text-sm text-muted-foreground">Olá, {user?.displayName} — acompanhe e gerencie as solicitações de divulgação.</p>
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
