@@ -7,6 +7,7 @@ vite.config.ts.*
 
 # Terraform
 .terraform/
+.terraform\
 .terraform.lock.hcl
 terraform.tfstate
 terraform.tfstate.*
