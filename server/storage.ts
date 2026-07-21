@@ -16,13 +16,15 @@ export interface IStorage {
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  createUserAdmin(user: AdminCreateUser): Promise<User>;
+  createUserAdmin(user: AdminCreateUser & { mustChangePassword?: boolean }): Promise<User>;
   getAllUsers(): Promise<User[]>;
   deleteUser(id: number): Promise<boolean>;
   updateUserAdmin(id: number, isAdmin: boolean): Promise<User | undefined>;
   updateUserRoles(id: number, roles: ScheduleRole[]): Promise<User | undefined>;
   updateUserProfile(id: number, profile: UpdateProfile): Promise<User | undefined>;
-  updateUserPassword(id: number, password: string): Promise<User | undefined>;
+  // `mustChangePassword` acompanha a senha: some quando o dono escolhe a sua,
+  // liga quando um admin define uma provisória.
+  updateUserPassword(id: number, password: string, mustChangePassword?: boolean): Promise<User | undefined>;
   // Requests
   getRequest(id: number): Promise<Request | undefined>;
   getAllRequests(): Promise<Request[]>;
@@ -113,12 +115,13 @@ export class MemStorage implements IStorage {
       password: isHashed(data.password) ? data.password : hashPassword(data.password),
       isAdmin: false,
       roles: data.roles ?? [],
+      mustChangePassword: false,
     };
     this.users.set(id, user);
     return user;
   }
 
-  async createUserAdmin(data: AdminCreateUser): Promise<User> {
+  async createUserAdmin(data: AdminCreateUser & { mustChangePassword?: boolean }): Promise<User> {
     const id = this.nextUserId++;
     const user: User = {
       ...emptyProfile,
@@ -128,6 +131,7 @@ export class MemStorage implements IStorage {
       password: isHashed(data.password) ? data.password : hashPassword(data.password),
       isAdmin: data.isAdmin ?? false,
       roles: data.roles ?? [],
+      mustChangePassword: data.mustChangePassword ?? false,
     };
     this.users.set(id, user);
     return user;
@@ -172,10 +176,11 @@ export class MemStorage implements IStorage {
     return updated;
   }
 
-  async updateUserPassword(id: number, password: string): Promise<User | undefined> {
+  async updateUserPassword(id: number, password: string, mustChangePassword = false): Promise<User | undefined> {
     const user = this.users.get(id);
     if (!user) return undefined;
     user.password = password;
+    user.mustChangePassword = mustChangePassword;
     this.users.set(id, user);
     return user;
   }

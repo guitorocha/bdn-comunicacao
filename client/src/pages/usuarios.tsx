@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
 import { PASSWORD_MIN_LENGTH, passwordIssue } from "@shared/schema";
-import { KeyRound, Save, UserCog } from "lucide-react";
+import { KeyRound, Save, ShieldAlert, UserCog } from "lucide-react";
 import { Redirect } from "wouter";
 import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
@@ -31,6 +31,19 @@ export default function UsuariosPage() {
             Mantenha seu cadastro e sua senha atualizados.
           </p>
         </div>
+
+        {user.mustChangePassword && (
+          <Card className="p-4 border-destructive/40 bg-destructive/5 flex gap-3" data-testid="banner-must-change-password">
+            <ShieldAlert className="w-5 h-5 text-destructive shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-sm font-semibold">Troque sua senha para continuar</p>
+              <p className="text-xs text-muted-foreground">
+                Sua senha atual foi definida por um administrador, que a conhece. Escolha uma
+                senha nova abaixo — as demais páginas ficam bloqueadas até lá.
+              </p>
+            </div>
+          </Card>
+        )}
 
         <ProfileForm />
         <PasswordForm />
@@ -153,6 +166,7 @@ function ProfileForm() {
 
 function PasswordForm() {
   const { toast } = useToast();
+  const { updateUser } = useAuth();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -166,6 +180,8 @@ function PasswordForm() {
       return res.json();
     },
     onSuccess: () => {
+      // A senha passou a ser escolha do dono: some a exigência de troca
+      updateUser({ mustChangePassword: false });
       // A troca invalidou a sessão antiga — o servidor já reemitiu o cookie
       toast({
         title: "Senha alterada",

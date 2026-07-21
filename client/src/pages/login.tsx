@@ -32,6 +32,16 @@ export default function Login() {
     onSuccess: ({ user }) => {
       // O token não vem no corpo: ficou no cookie HttpOnly gravado pelo servidor
       login(user);
+      // Senha provisória (conta criada ou redefinida por um admin): trocar antes
+      // de qualquer outra coisa — só o dono deve conhecer a própria senha.
+      if (user.mustChangePassword) {
+        toast({
+          title: "Defina sua senha",
+          description: "Sua senha foi definida por um administrador. Escolha uma nova para continuar.",
+        });
+        navigate("/usuarios");
+        return;
+      }
       // Volta para a página que pediu o login (?next=...), senão vai às escalas.
       // O wouter (useHashLocation) guarda a query real em window.location.search,
       // não no hash — por isso lemos de search aqui.

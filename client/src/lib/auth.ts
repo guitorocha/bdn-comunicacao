@@ -7,6 +7,8 @@ interface AuthUser {
   displayName: string;
   isAdmin: boolean;
   roles: ScheduleRole[];
+  // Senha definida por um admin: o app prende o usuário em /usuarios até trocar
+  mustChangePassword?: boolean;
   email?: string | null;
   phone?: string | null;
   cellName?: string | null;

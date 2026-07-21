@@ -1,7 +1,7 @@
 import type { Express, Request as ExpressRequest, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, SCHEDULE_ROLES, type User } from "@shared/schema";
+import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isRootAdmin, passwordIssue, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, type User } from "@shared/schema";
 import { z } from "zod";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { hashPassword, isHashed, verifyPassword } from "./password";
@@ -131,7 +131,12 @@ export async function registerRoutes(
     // O token é assinado depois, sobre o hash já gravado.
     let user = found;
     if (!isHashed(found.password)) {
-      user = (await storage.updateUserPassword(found.id, hashPassword(password))) ?? found;
+      // Só troca o formato da senha — a obrigação de trocá-la, se houver, fica
+      user = (await storage.updateUserPassword(
+        found.id,
+        hashPassword(password),
+        found.mustChangePassword,
+      )) ?? found;
     }
     const { password: _pw, ...safeUser } = user;
     // O token sai só no cookie HttpOnly — não vai no corpo, senão o cliente
@@ -201,12 +206,14 @@ export async function registerRoutes(
     if (!verifyPassword(parsed.data.currentPassword, user.password)) {
       return res.status(403).json({ message: "Senha atual incorreta" });
     }
-    const updated = await storage.updateUserPassword(user.id, hashPassword(parsed.data.newPassword));
+    // A senha agora é escolha do dono: cai a obrigação de trocá-la
+    const updated = await storage.updateUserPassword(user.id, hashPassword(parsed.data.newPassword), false);
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
     // A troca derruba os tokens antigos (inclusive em outros dispositivos);
     // reemite o cookie para quem acabou de trocar continuar na sessão.
     setSessionCookie(res, updated);
-    return res.json({ success: true });
+    const { password: _pw, ...safeUser } = updated;
+    return res.json({ success: true, user: safeUser });
   });
 
   app.post("/api/users", requireAdmin, async (req, res) => {
@@ -217,7 +224,13 @@ export async function registerRoutes(
       if (existing) {
         return res.status(409).json({ message: "Já existe um usuário com esse nome de usuário" });
       }
-      const user = await storage.createUserAdmin({ ...data, password: hashPassword(data.password) });
+      // Quem cria escolhe a primeira senha e portanto a conhece: o dono é
+      // obrigado a trocá-la no primeiro acesso.
+      const user = await storage.createUserAdmin({
+        ...data,
+        password: hashPassword(data.password),
+        mustChangePassword: true,
+      });
       const { password, ...safeUser } = user;
       return res.status(201).json(safeUser);
     } catch (err) {
@@ -228,9 +241,64 @@ export async function registerRoutes(
     }
   });
 
+  // Reset de senha por um admin. Não pede a senha atual — o admin não a conhece
+  // — então o alvo é obrigado a trocá-la no próximo acesso, e o reset já derruba
+  // todas as sessões dele (o token carrega a impressão digital da senha).
+  // A conta raiz "admin" é a exceção: só ela mesma redefine a própria senha,
+  // senão um admin comum comprometido tomaria a conta de recuperação. Se a senha
+  // da raiz for perdida, a saída é um update direto no DynamoDB.
+  app.post("/api/users/:id/reset-password", requireAdmin, async (req, res) => {
+    const actor = (req as AuthedRequest).authUser!;
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+
+    const target = await storage.getUser(id);
+    if (!target) return res.status(404).json({ message: "Usuário não encontrado" });
+
+    if (isRootAdmin(target) && target.id !== actor.id) {
+      return res.status(403).json({
+        message: `A senha do usuário "${ROOT_ADMIN_USERNAME}" só pode ser redefinida por ele mesmo`,
+      });
+    }
+
+    const parsed = adminResetPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Dados inválidos" });
+    }
+    // A política também barra senha igual ao login do alvo
+    const issue = passwordIssue(parsed.data.newPassword, target.username);
+    if (issue) return res.status(400).json({ message: issue });
+
+    // Redefinindo a própria senha, quem escolheu foi o dono: nada a forçar.
+    const isSelf = target.id === actor.id;
+    const updated = await storage.updateUserPassword(
+      target.id,
+      hashPassword(parsed.data.newPassword),
+      !isSelf,
+    );
+    if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+
+    // O reset invalida os tokens do alvo — inclusive o do próprio admin, se foi
+    // a senha dele: reemite o cookie para ele não cair da sessão.
+    if (isSelf) setSessionCookie(res, updated);
+
+    const { password, ...safeUser } = updated;
+    return res.json({ success: true, user: safeUser });
+  });
+
   app.delete("/api/users/:id", requireAdmin, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+
+    // A conta raiz não pode ser apagada por ninguém: é a via de recuperação do
+    // sistema, e apagá-la seria só outro jeito de tomá-la (apagar e recriar).
+    const target = await storage.getUser(id);
+    if (target && isRootAdmin(target)) {
+      return res.status(403).json({
+        message: `O usuário "${ROOT_ADMIN_USERNAME}" não pode ser removido`,
+      });
+    }
+
     const deleted = await storage.deleteUser(id);
     if (!deleted) return res.status(404).json({ message: "Usuário não encontrado" });
     return res.json({ success: true });
@@ -255,6 +323,17 @@ export async function registerRoutes(
     if (typeof isAdmin !== "boolean") {
       return res.status(400).json({ message: "Campo isAdmin deve ser boolean" });
     }
+
+    // Tirar o admin da conta raiz a deixaria inútil como recuperação — e seria
+    // o mesmo ataque do reset por outro caminho.
+    if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+    const target = await storage.getUser(id);
+    if (target && isRootAdmin(target) && !isAdmin) {
+      return res.status(403).json({
+        message: `O usuário "${ROOT_ADMIN_USERNAME}" não pode deixar de ser administrador`,
+      });
+    }
+
     const updated = await storage.updateUserAdmin(id, isAdmin);
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
     const { password, ...safeUser } = updated;

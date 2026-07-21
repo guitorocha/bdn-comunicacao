@@ -57,6 +57,9 @@ function normalizeUser(item: Record<string, unknown> | undefined): User | undefi
     phone: user.phone ?? null,
     cellName: user.cellName ?? null,
     cellLeaders: user.cellLeaders ?? null,
+    // Contas anteriores à troca obrigatória não têm o atributo — não é para
+    // barrar quem já escolheu a própria senha.
+    mustChangePassword: user.mustChangePassword ?? false,
   };
 }
 
@@ -105,18 +108,26 @@ export class DynamoStorage implements IStorage {
   }
 
   async createUser(data: InsertUser): Promise<User> {
-    const user: User = { ...emptyProfile, id: generateId(), ...data, isAdmin: false, roles: data.roles ?? [] };
+    const user: User = {
+      ...emptyProfile,
+      id: generateId(),
+      ...data,
+      isAdmin: false,
+      roles: data.roles ?? [],
+      mustChangePassword: false,
+    };
     await db.send(new PutCommand({ TableName: TABLE_USERS, Item: user }));
     return user;
   }
 
-  async createUserAdmin(data: AdminCreateUser): Promise<User> {
+  async createUserAdmin(data: AdminCreateUser & { mustChangePassword?: boolean }): Promise<User> {
     const user: User = {
       ...emptyProfile,
       id: generateId(),
       ...data,
       isAdmin: data.isAdmin ?? false,
       roles: data.roles ?? [],
+      mustChangePassword: data.mustChangePassword ?? false,
     };
     await db.send(new PutCommand({ TableName: TABLE_USERS, Item: user }));
     return user;
@@ -183,13 +194,13 @@ export class DynamoStorage implements IStorage {
     return normalizeUser(result.Attributes);
   }
 
-  async updateUserPassword(id: number, password: string): Promise<User | undefined> {
+  async updateUserPassword(id: number, password: string, mustChangePassword = false): Promise<User | undefined> {
     const result = await db.send(new UpdateCommand({
       TableName: TABLE_USERS,
       Key: { id },
-      UpdateExpression: "SET #p = :p",
-      ExpressionAttributeNames: { "#p": "password" },
-      ExpressionAttributeValues: { ":p": password },
+      UpdateExpression: "SET #p = :p, #m = :m",
+      ExpressionAttributeNames: { "#p": "password", "#m": "mustChangePassword" },
+      ExpressionAttributeValues: { ":p": password, ":m": mustChangePassword },
       ConditionExpression: "attribute_exists(id)",
       ReturnValues: "ALL_NEW",
     }));

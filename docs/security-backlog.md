@@ -5,6 +5,7 @@ Pending security work, ordered by priority. Each item says **what's wrong**, **w
 Written 2026-07-20, after the session that added password hashing and JWT sessions.
 Updated 2026-07-20 (same day): items 2, 4, 6, 7, 8, 9.4, 10 and 11 are now implemented — see below.
 Updated 2026-07-21: item 5 is implemented — the session moved to an `HttpOnly` cookie.
+Updated 2026-07-21 (same day): item 6 is closed — forced password change plus an admin reset endpoint (item 6.5 was built as an admin reset, not the e-mail flow).
 
 ## Already done (context, no action needed)
 
@@ -17,7 +18,7 @@ Updated 2026-07-21: item 5 is implemented — the session moved to an `HttpOnly`
 
 - **Request/subtask/comment routes require login** (item 2) — writes are all behind `requireUser`; only the public form, the tracking lookup and the two tracking `GET`s stay open. Comment authorship now comes from the session.
 - **Login rate limiting** (item 4) — per-IP and per-account limiters, counting only failed attempts. `trust proxy` set on both the dev server *and* the Lambda.
-- **Password policy** (item 6, partial) — 10-character floor plus a small blocklist, shared by the API and both UI forms. Reset flow and `mustChangePassword` still pending.
+- **Password policy** (item 6) — 10-character floor plus a small blocklist, shared by the API and every UI form. Forced first-login change and admin-driven reset landed later the same day.
 - **`/api/users` trimmed for non-admins** (item 7).
 - **Dev seed passwords out of the source** (item 8) — `DEV_SEED_PASSWORD` or a random one printed at startup.
 - **Response bodies no longer logged** (item 9.4) — the old logger wrote the login response, token included, to CloudWatch.
@@ -212,9 +213,25 @@ If you skip this, at minimum keep the token TTL short and make sure no third-par
 
 ## 6. Weak password policy, no reset flow
 
-**Status: steps 1-3 done, steps 4-5 still open.** `passwordIssue()` in [`shared/schema.ts`](../shared/schema.ts) enforces a 10-character floor plus a blocklist (`bdn2026`, `123456…`, church name, the username itself) and is applied to `changePasswordSchema` **and** `adminCreateUserSchema`, plus mirrored in both UI forms so the error shows before submitting.
+**Status: done — step 5 was deliberately replaced by an admin reset.** `passwordIssue()` in [`shared/schema.ts`](../shared/schema.ts) enforces a 10-character floor plus a blocklist (`bdn2026`, `123456…`, church name, the username itself) and is applied to `changePasswordSchema` **and** `adminCreateUserSchema`, plus mirrored in every UI form so the error shows before submitting.
 
-**Still to do:** step 4 (`mustChangePassword` on admin-created accounts) and step 5 (self-service e-mail reset).
+**Step 4 (`mustChangePassword`) — done.** The flag lives on the user record (`shared/schema.ts`), is set to `true` whenever an admin defines someone's password (creation or reset) and back to `false` the moment the owner picks their own on `PATCH /api/users/me/password`. Existing DynamoDB records have no such attribute; `normalizeUser` reads a missing one as `false`, so nobody who already chose their password gets locked out by the deploy. The client keeps the flag in the stored user object and `PasswordChangeGate` in [`client/src/App.tsx`](../client/src/App.tsx) redirects to `/usuarios` from the internal pages (`/solicitacoes/painel`, `/escalas`, `/equipes`) until it clears; the public form and tracking page stay reachable. Login sends the user straight to `/usuarios` with a toast, and the page shows a banner explaining why.
+
+Note this gate is **UX, not an access control**: someone who edits their own `localStorage` can reach the pages with a temporary password still set. That costs nothing in security terms — they already hold a working credential, and changing the password is one click away either route. The real point of the flag is that the admin stops knowing the password.
+
+**Step 5 — replaced.** E-mail reset (SES, single-use token) was **not** built. Instead, `POST /api/users/:id/reset-password` (`requireAdmin`) lets an admin set a temporary password for any account, which the owner is then forced to change. It reuses the shared policy, validates against the *target's* username, and — because the JWT embeds a fingerprint of the password hash — the reset kills every session that account had open. The UI is a dialog behind the key icon on each row in [`client/src/pages/equipes.tsx`](../client/src/pages/equipes.tsx); rows with a pending change show a "Senha provisória" badge.
+
+**The root `admin` account is the exception.** `isRootAdmin()` (username `admin`) marks it, and three routes honour it:
+
+| Route | Rule |
+|---|---|
+| `POST /api/users/:id/reset-password` | only the root account itself may reset it |
+| `DELETE /api/users/:id` | the root account cannot be deleted, by anyone, including itself |
+| `PATCH /api/users/:id/admin` | the root account cannot lose `isAdmin` (setting it to `true` is a harmless no-op) |
+
+All three exist for the same reason: an admin who can delete-and-recreate, or demote-then-reset, has the root account by another route, and one compromised admin session would be enough. The `/equipes` UI disables the matching controls with a tooltip, but the server is what enforces it. If the root password is ever lost, the way back is a direct DynamoDB update — intentional, and the reason the e-mail flow is less urgent than it looked.
+
+**Still open (nice to have):** a self-service e-mail reset, so a forgotten password doesn't need an admin at all.
 
 **Severity: medium.**
 
@@ -228,9 +245,9 @@ If you skip this, at minimum keep the token TTL short and make sure no third-par
 2. Block obvious values (a small list: `bdn2026`, `123456789`, the username itself, the church name). A short in-repo array is enough at this scale.
 3. Mirror the rule in the UI so the error appears before submitting — [`client/src/pages/usuarios.tsx`](../client/src/pages/usuarios.tsx) (`PasswordForm`) and the create form in [`client/src/pages/equipes.tsx`](../client/src/pages/equipes.tsx).
 4. Force a change on first login: add a `mustChangePassword` flag set when an admin creates or resets an account, and have the client route to `/usuarios` until it's cleared.
-5. Self-service reset by e-mail is now feasible since `/usuarios` collects addresses: single-use token, 30-minute expiry, stored hashed. Needs an e-mail sender (SES fits the AWS stack). This is the largest piece — treat it as its own task.
+5. ~~Self-service reset by e-mail~~ — superseded by the admin reset endpoint described above.
 
-**Verify:** a 6-character password is rejected by both the API and the UI; a newly created user is sent to the password page on first login.
+**Verify:** a 6-character password is rejected by both the API and the UI; a newly created user is sent to the password page on first login. Verified against the dev server: creating a user returns `mustChangePassword: true`; that user's login carries the flag; changing their own password clears it; an admin reset sets it again and 401s the target's existing session; a second admin resetting `admin` gets 403 while the root account resetting itself gets 200 with a fresh cookie. Also verified: deleting or demoting the root account returns 403 for a second admin *and* for the root account itself, while the same operations against an ordinary user still return 200.
 
 ---
 
@@ -352,6 +369,6 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 
 - **Token TTL is 12h with no refresh** — a volunteer mid-task gets logged out. If that's annoying in practice, add a sliding refresh (reissue when the token is past half its life) rather than simply extending the TTL.
 - **`JWT_SECRET` rotation** invalidates every session at once. Acceptable at this size; if you want zero-downtime rotation, accept two secrets during a transition window.
-- **Admins can set other people's passwords** through user creation, and there's no "reset" endpoint — decide deliberately whether admins should be able to reset (with a forced change on next login, per item 6) or whether recovery must go through e-mail only.
+- ~~**Admins can set other people's passwords** through user creation, and there's no "reset" endpoint~~ — decided: admins reset any account, the owner is forced to change it on next login, and the root `admin` account can only be reset by itself (and cannot be deleted or demoted at all). See item 6.
 - **`GET /api/users/me` and `GET /api/auth/me` are duplicates** — harmless, but collapse them when convenient.
 - **No account for shared logins** — if `comunicacao` is a shared account, individual audit trails (item 9) become meaningless for it. Prefer one account per person.

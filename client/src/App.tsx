@@ -1,5 +1,6 @@
-import { Switch, Route, Router, Redirect } from "wouter";
+import { Switch, Route, Router, Redirect, useLocation } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
+import { useAuth } from "@/lib/auth";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -13,6 +14,21 @@ import Painel from "@/pages/painel";
 import Equipes from "@/pages/equipes";
 import Usuarios from "@/pages/usuarios";
 import NotFound from "@/pages/not-found";
+
+// Senha definida por um admin (conta nova ou reset): o usuário fica preso em
+// /usuarios até escolher a sua. Só as áreas internas são barradas — as páginas
+// públicas (formulário, acompanhamento) continuam abertas para todo mundo.
+const GATED_PATHS = ["/solicitacoes/painel", "/escalas", "/equipes"];
+
+function PasswordChangeGate({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const [location] = useLocation();
+
+  if (user?.mustChangePassword && GATED_PATHS.includes(location)) {
+    return <Redirect to="/usuarios" />;
+  }
+  return <>{children}</>;
+}
 
 function AppRouter() {
   return (
@@ -40,7 +56,9 @@ function App() {
       <TooltipProvider>
         <Toaster />
         <Router hook={useHashLocation}>
-          <AppRouter />
+          <PasswordChangeGate>
+            <AppRouter />
+          </PasswordChangeGate>
         </Router>
       </TooltipProvider>
     </QueryClientProvider>

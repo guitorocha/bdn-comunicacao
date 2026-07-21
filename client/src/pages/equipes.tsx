@@ -20,9 +20,18 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { PASSWORD_MIN_LENGTH, passwordIssue } from "@shared/schema";
-import { ArrowLeft, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
+import { PASSWORD_MIN_LENGTH, isRootAdmin, passwordIssue, ROOT_ADMIN_USERNAME } from "@shared/schema";
+import { ArrowLeft, KeyRound, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
 import { Link, Redirect } from "wouter";
 import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
@@ -32,6 +41,7 @@ interface SafeUser {
   username: string;
   displayName: string;
   isAdmin: boolean;
+  mustChangePassword?: boolean;
   email?: string | null;
   phone?: string | null;
   cellName?: string | null;
@@ -183,6 +193,119 @@ function CreateUserForm() {
   );
 }
 
+// Reset de senha por um admin: define uma senha provisória, que o dono é
+// obrigado a trocar no primeiro acesso. A conta raiz é a exceção — só ela
+// redefine a própria senha, senão um admin comprometido tomaria a conta de
+// recuperação do sistema.
+function ResetPasswordDialog({ user, isSelf }: { user: SafeUser; isSelf: boolean }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+
+  const blocked = isRootAdmin(user) && !isSelf;
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/users/${user.id}/reset-password`, {
+        newPassword: password.trim(),
+      });
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Senha redefinida",
+        description: isSelf
+          ? "Sua senha foi alterada. As sessões em outros dispositivos foram encerradas."
+          : `Passe a senha para ${user.displayName}. Ele precisará trocá-la no primeiro acesso.`,
+      });
+      setOpen(false);
+      setPassword("");
+      setConfirm("");
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erro", description: err.message, variant: "destructive" });
+    },
+  });
+
+  // Mesma política do servidor, avaliada enquanto digita
+  const policyIssue = password.length > 0 ? passwordIssue(password.trim(), user.username) : null;
+  const mismatch = confirm.length > 0 && password !== confirm;
+  const canSubmit = password.trim().length > 0 && confirm.length > 0 && !policyIssue && !mismatch;
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon"
+          disabled={blocked}
+          title={
+            blocked
+              ? `A senha de @${ROOT_ADMIN_USERNAME} só pode ser redefinida pelo próprio usuário`
+              : "Redefinir senha"
+          }
+          className="text-muted-foreground hover:text-primary"
+          data-testid={`button-reset-password-${user.id}`}
+        >
+          <KeyRound className="w-4 h-4" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Redefinir senha</DialogTitle>
+          <DialogDescription>
+            Defina uma senha provisória para <strong>{user.displayName}</strong> (@{user.username}).
+            {!isSelf && " Ele será obrigado a trocá-la no primeiro acesso, e todas as sessões abertas dele serão encerradas."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor={`reset-password-${user.id}`}>Nova senha</Label>
+            <Input
+              id={`reset-password-${user.id}`}
+              type="password"
+              placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres`}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              data-testid={`input-reset-password-${user.id}`}
+            />
+            {policyIssue && <p className="text-xs text-destructive">{policyIssue}</p>}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor={`reset-confirm-${user.id}`}>Confirmar senha</Label>
+            <Input
+              id={`reset-confirm-${user.id}`}
+              type="password"
+              placeholder="********"
+              value={confirm}
+              onChange={(e) => setConfirm(e.target.value)}
+              data-testid={`input-reset-confirm-${user.id}`}
+            />
+            {mismatch && <p className="text-xs text-destructive">As senhas não conferem.</p>}
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setOpen(false)}>
+            Cancelar
+          </Button>
+          <Button
+            onClick={() => mutation.mutate()}
+            disabled={!canSubmit || mutation.isPending}
+            data-testid={`button-confirm-reset-${user.id}`}
+          >
+            <KeyRound className="w-4 h-4 mr-1" />
+            {mutation.isPending ? "Redefinindo..." : "Redefinir senha"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function UserList({ currentUserId }: { currentUserId: number }) {
   const { toast } = useToast();
 
@@ -239,6 +362,8 @@ function UserList({ currentUserId }: { currentUserId: number }) {
       <div className="space-y-2">
         {users.map((u) => {
           const isSelf = u.id === currentUserId;
+          // A conta raiz é a via de recuperação: não se apaga nem se rebaixa
+          const isRoot = isRootAdmin(u);
           return (
             <div
               key={u.id}
@@ -257,6 +382,11 @@ function UserList({ currentUserId }: { currentUserId: number }) {
                   {isSelf && (
                     <Badge variant="outline" className="text-xs">Você</Badge>
                   )}
+                  {u.mustChangePassword && (
+                    <Badge variant="outline" className="text-xs text-muted-foreground" title="Senha definida por um admin — o usuário precisa trocá-la">
+                      Senha provisória
+                    </Badge>
+                  )}
                 </div>
                 <p className="text-xs text-muted-foreground">
                   @{u.username}
@@ -272,13 +402,20 @@ function UserList({ currentUserId }: { currentUserId: number }) {
 
               <div className="flex items-center gap-2 shrink-0">
                 {/* Toggle admin */}
-                <div className="flex items-center gap-1.5" title={u.isAdmin ? "Remover admin" : "Tornar admin"}>
+                <div
+                  className="flex items-center gap-1.5"
+                  title={
+                    isRoot
+                      ? `O usuário "${ROOT_ADMIN_USERNAME}" é sempre administrador`
+                      : u.isAdmin ? "Remover admin" : "Tornar admin"
+                  }
+                >
                   <Switch
                     checked={u.isAdmin}
                     onCheckedChange={(checked) =>
                       toggleAdminMutation.mutate({ id: u.id, isAdmin: checked })
                     }
-                    disabled={isSelf || toggleAdminMutation.isPending}
+                    disabled={isSelf || isRoot || toggleAdminMutation.isPending}
                     data-testid={`switch-admin-${u.id}`}
                   />
                   <Shield className={`w-3.5 h-3.5 ${u.isAdmin ? "text-primary" : "text-muted-foreground/40"}`} />
@@ -286,13 +423,17 @@ function UserList({ currentUserId }: { currentUserId: number }) {
 
                 <Separator orientation="vertical" className="h-6" />
 
+                {/* Reset de senha */}
+                <ResetPasswordDialog user={u} isSelf={isSelf} />
+
                 {/* Delete */}
                 <AlertDialog>
                   <AlertDialogTrigger asChild>
                     <Button
                       variant="ghost"
                       size="icon"
-                      disabled={isSelf}
+                      disabled={isSelf || isRoot}
+                      title={isRoot ? `O usuário "${ROOT_ADMIN_USERNAME}" não pode ser removido` : "Remover usuário"}
                       className="text-muted-foreground hover:text-destructive"
                       data-testid={`button-delete-user-${u.id}`}
                     >

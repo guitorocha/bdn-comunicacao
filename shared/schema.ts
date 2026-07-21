@@ -22,6 +22,9 @@ export const users = pgTable("users", {
   displayName: text("display_name").notNull(),
   isAdmin: boolean("is_admin").notNull().default(false),
   roles: jsonb("roles").$type<ScheduleRole[]>().notNull().default([]),
+  // Senha definida por um admin (criação ou reset): o dono precisa trocá-la
+  // antes de usar o sistema, para que ninguém além dele conheça a senha.
+  mustChangePassword: boolean("must_change_password").notNull().default(false),
   // Profile data the member keeps up to date on /usuarios
   email: text("email"),
   phone: text("phone"),
@@ -31,10 +34,20 @@ export const users = pgTable("users", {
 
 export const insertUserSchema = createInsertSchema(users, {
   roles: z.array(z.enum(SCHEDULE_ROLES)).default([]),
-}).omit({ id: true, isAdmin: true });
+}).omit({ id: true, isAdmin: true, mustChangePassword: true });
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type SafeUser = Omit<User, "password">;
+
+// ── Usuário raiz ──
+// A conta "admin" é a que sobra quando tudo mais falha: só ela pode redefinir a
+// própria senha (ou um update direto no banco). Se um admin qualquer pudesse
+// redefini-la, bastaria uma conta de admin comprometida para tomar a raiz.
+export const ROOT_ADMIN_USERNAME = "admin";
+
+export function isRootAdmin(user: { username: string }): boolean {
+  return user.username.trim().toLowerCase() === ROOT_ADMIN_USERNAME;
+}
 
 // ── Política de senha ──
 // Comprimento vale mais que regras de caractere: uma frase longa é melhor que
@@ -71,7 +84,8 @@ export const adminCreateUserSchema = createInsertSchema(users, {
   roles: z.array(z.enum(SCHEDULE_ROLES)).default([]),
   password: passwordField,
 })
-  .omit({ id: true })
+  // mustChangePassword é decidido pelo servidor, não pelo corpo do request
+  .omit({ id: true, mustChangePassword: true })
   .superRefine((data, ctx) => {
     const issue = passwordIssue(data.password, data.username);
     if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["password"], message: issue });
@@ -95,6 +109,13 @@ export const changePasswordSchema = z.object({
   newPassword: passwordField,
 });
 export type ChangePassword = z.infer<typeof changePasswordSchema>;
+
+// Reset feito por um admin: não pede a senha atual (o admin não a conhece), e o
+// dono da conta é obrigado a trocar a senha no próximo acesso.
+export const adminResetPasswordSchema = z.object({
+  newPassword: passwordField,
+});
+export type AdminResetPassword = z.infer<typeof adminResetPasswordSchema>;
 
 // Content requests
 export const requests = pgTable("requests", {
