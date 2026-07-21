@@ -124,3 +124,49 @@ resource "aws_dynamodb_table" "comments" {
     Table = "comments"
   }
 }
+
+# ── Tabela: unavailability ──
+# PK: id (Number) — dias em que voluntários não podem servir (escalas)
+# GSI: userId-index → para busca por usuário
+resource "aws_dynamodb_table" "unavailability" {
+  name         = "${var.app_name}-unavailability"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "N"
+  }
+
+  attribute {
+    name = "userId"
+    type = "N"
+  }
+
+  global_secondary_index {
+    name            = "userId-index"
+    hash_key        = "userId"
+    projection_type = "ALL"
+  }
+
+  tags = {
+    Table = "unavailability"
+  }
+}
+
+# ── Tabela: schedules ──
+# PK: id (Number) — escalas de cultos e eventos especiais
+resource "aws_dynamodb_table" "schedules" {
+  name         = "${var.app_name}-schedules"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "N"
+  }
+
+  tags = {
+    Table = "schedules"
+  }
+}

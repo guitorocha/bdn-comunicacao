@@ -3,7 +3,12 @@ import {
   type Request, type InsertRequest,
   type Subtask, type InsertSubtask,
   type Comment, type InsertComment,
+  type Schedule, type InsertSchedule,
+  type Unavailability, type InsertUnavailability,
+  type ScheduleRole,
+  type UpdateProfile,
 } from "@shared/schema";
+import { hashPassword, isHashed } from "./password";
 
 export interface IStorage {
   // Users
@@ -14,6 +19,9 @@ export interface IStorage {
   getAllUsers(): Promise<User[]>;
   deleteUser(id: number): Promise<boolean>;
   updateUserAdmin(id: number, isAdmin: boolean): Promise<User | undefined>;
+  updateUserRoles(id: number, roles: ScheduleRole[]): Promise<User | undefined>;
+  updateUserProfile(id: number, profile: UpdateProfile): Promise<User | undefined>;
+  updateUserPassword(id: number, password: string): Promise<User | undefined>;
   // Requests
   getRequest(id: number): Promise<Request | undefined>;
   getAllRequests(): Promise<Request[]>;
@@ -28,31 +36,80 @@ export interface IStorage {
   // Comments
   getCommentsByRequest(requestId: number): Promise<Comment[]>;
   createComment(comment: InsertComment): Promise<Comment>;
+  // Unavailability
+  getAllUnavailability(): Promise<Unavailability[]>;
+  getUnavailabilityByUser(userId: number): Promise<Unavailability[]>;
+  createUnavailability(entry: InsertUnavailability): Promise<Unavailability>;
+  getUnavailabilityEntry(id: number): Promise<Unavailability | undefined>;
+  deleteUnavailability(id: number): Promise<boolean>;
+  // Schedules
+  getAllSchedules(): Promise<Schedule[]>;
+  getSchedule(id: number): Promise<Schedule | undefined>;
+  createSchedule(schedule: InsertSchedule): Promise<Schedule>;
+  updateSchedule(id: number, schedule: InsertSchedule): Promise<Schedule | undefined>;
+  deleteSchedule(id: number): Promise<boolean>;
 }
+
+// Profile fields start empty — the member fills them in on /usuarios
+const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: null };
 
 export class MemStorage implements IStorage {
   private users: Map<number, User> = new Map();
   private requests: Map<number, Request> = new Map();
   private subtasks: Map<number, Subtask> = new Map();
   private comments: Map<number, Comment> = new Map();
+  private schedules: Map<number, Schedule> = new Map();
+  private unavailabilityEntries: Map<number, Unavailability> = new Map();
   private nextUserId = 1;
   private nextRequestId = 1000;
   private nextSubtaskId = 1;
   private nextCommentId = 1;
+  private nextScheduleId = 1;
+  private nextUnavailabilityId = 1;
 
   constructor() {
-    // Seed users
+    // Seed users (dev only). Users with roles are the schedulable volunteers.
     this.createUserAdmin({
       username: "admin",
       password: "bdn2026",
       displayName: "Administrador",
       isAdmin: true,
+      roles: [],
     });
     this.createUserAdmin({
       username: "comunicacao",
       password: "comunica2026",
       displayName: "Equipe Comunicação",
       isAdmin: false,
+      roles: ["projecao"],
+    });
+    this.createUserAdmin({
+      username: "lucas",
+      password: "lucas2026",
+      displayName: "Lucas Almeida",
+      isAdmin: false,
+      roles: ["fotografia", "filmmaker"],
+    });
+    this.createUserAdmin({
+      username: "mariana",
+      password: "mariana2026",
+      displayName: "Mariana Souza",
+      isAdmin: false,
+      roles: ["fotografia"],
+    });
+    this.createUserAdmin({
+      username: "pedro",
+      password: "pedro2026",
+      displayName: "Pedro Santos",
+      isAdmin: false,
+      roles: ["projecao", "transmissao"],
+    });
+    this.createUserAdmin({
+      username: "gabriel",
+      password: "gabriel2026",
+      displayName: "Gabriel Costa",
+      isAdmin: false,
+      roles: ["transmissao", "filmmaker"],
     });
   }
 
@@ -67,14 +124,29 @@ export class MemStorage implements IStorage {
 
   async createUser(data: InsertUser): Promise<User> {
     const id = this.nextUserId++;
-    const user: User = { id, ...data, isAdmin: false };
+    const user: User = {
+      ...emptyProfile,
+      id,
+      ...data,
+      password: isHashed(data.password) ? data.password : hashPassword(data.password),
+      isAdmin: false,
+      roles: data.roles ?? [],
+    };
     this.users.set(id, user);
     return user;
   }
 
   async createUserAdmin(data: AdminCreateUser): Promise<User> {
     const id = this.nextUserId++;
-    const user: User = { id, ...data, isAdmin: data.isAdmin ?? false };
+    const user: User = {
+      ...emptyProfile,
+      id,
+      ...data,
+      // O seed usa senhas em texto puro — guarda sempre o hash
+      password: isHashed(data.password) ? data.password : hashPassword(data.password),
+      isAdmin: data.isAdmin ?? false,
+      roles: data.roles ?? [],
+    };
     this.users.set(id, user);
     return user;
   }
@@ -91,6 +163,37 @@ export class MemStorage implements IStorage {
     const user = this.users.get(id);
     if (!user) return undefined;
     user.isAdmin = isAdmin;
+    this.users.set(id, user);
+    return user;
+  }
+
+  async updateUserRoles(id: number, roles: ScheduleRole[]): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    user.roles = roles;
+    this.users.set(id, user);
+    return user;
+  }
+
+  async updateUserProfile(id: number, profile: UpdateProfile): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    const updated: User = {
+      ...user,
+      displayName: profile.displayName,
+      email: profile.email || null,
+      phone: profile.phone || null,
+      cellName: profile.cellName || null,
+      cellLeaders: profile.cellLeaders || null,
+    };
+    this.users.set(id, updated);
+    return updated;
+  }
+
+  async updateUserPassword(id: number, password: string): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    user.password = password;
     this.users.set(id, user);
     return user;
   }
@@ -179,6 +282,71 @@ export class MemStorage implements IStorage {
     };
     this.comments.set(id, comment);
     return comment;
+  }
+
+  // Unavailability
+  async getAllUnavailability(): Promise<Unavailability[]> {
+    return Array.from(this.unavailabilityEntries.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async getUnavailabilityByUser(userId: number): Promise<Unavailability[]> {
+    return Array.from(this.unavailabilityEntries.values())
+      .filter((u) => u.userId === userId)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async createUnavailability(data: InsertUnavailability): Promise<Unavailability> {
+    const existing = Array.from(this.unavailabilityEntries.values()).find(
+      (u) => u.userId === data.userId && u.date === data.date
+    );
+    if (existing) return existing;
+    const id = this.nextUnavailabilityId++;
+    const entry: Unavailability = { id, ...data, createdAt: new Date().toISOString() };
+    this.unavailabilityEntries.set(id, entry);
+    return entry;
+  }
+
+  async getUnavailabilityEntry(id: number): Promise<Unavailability | undefined> {
+    return this.unavailabilityEntries.get(id);
+  }
+
+  async deleteUnavailability(id: number): Promise<boolean> {
+    return this.unavailabilityEntries.delete(id);
+  }
+
+  // Schedules
+  async getAllSchedules(): Promise<Schedule[]> {
+    return Array.from(this.schedules.values()).sort((a, b) =>
+      `${a.eventDate} ${a.eventTime}`.localeCompare(`${b.eventDate} ${b.eventTime}`)
+    );
+  }
+
+  async getSchedule(id: number): Promise<Schedule | undefined> {
+    return this.schedules.get(id);
+  }
+
+  async createSchedule(data: InsertSchedule): Promise<Schedule> {
+    const id = this.nextScheduleId++;
+    const schedule: Schedule = {
+      id,
+      ...data,
+      notes: data.notes ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.schedules.set(id, schedule);
+    return schedule;
+  }
+
+  async updateSchedule(id: number, data: InsertSchedule): Promise<Schedule | undefined> {
+    const existing = this.schedules.get(id);
+    if (!existing) return undefined;
+    const updated: Schedule = { ...existing, ...data, notes: data.notes ?? null };
+    this.schedules.set(id, updated);
+    return updated;
+  }
+
+  async deleteSchedule(id: number): Promise<boolean> {
+    return this.schedules.delete(id);
   }
 }
 

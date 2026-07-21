@@ -13,8 +13,10 @@ import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { AlertTriangle, CheckCircle2, Clock, Info, Send } from "lucide-react";
+import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardList, Clock, Info, Send } from "lucide-react";
 import { Link } from "wouter";
+import { useAuth } from "@/lib/auth";
+import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 
 const formSchema = z.object({
@@ -31,8 +33,9 @@ const formSchema = z.object({
 
 type FormData = z.infer<typeof formSchema>;
 
-export default function Home() {
+export default function Solicitacoes() {
   const { toast } = useToast();
+  const { isAuthenticated } = useAuth();
   const [submittedId, setSubmittedId] = useState<number | null>(null);
   const [conflict, setConflict] = useState<string | null>(null);
   const [showCustomMinistry, setShowCustomMinistry] = useState(false);
@@ -127,28 +130,25 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <BdnLogo />
-            <div>
-              <h1 className="text-sm font-bold uppercase tracking-wider">Comunicação</h1>
-              <p className="text-xs text-muted-foreground">Solicitação de Divulgação</p>
-            </div>
-          </div>
-          <nav className="flex items-center gap-2">
-            <Link href="/acompanhar">
-              <Button variant="secondary" size="sm" data-testid="link-track">Acompanhar</Button>
-            </Link>
-            <Link href="/admin">
-              <Button variant="ghost" size="sm" data-testid="link-admin">Equipe</Button>
-            </Link>
-          </nav>
-        </div>
-      </header>
+      <Navbar subtitle="Solicitação de Divulgação" />
 
       <main className="max-w-3xl mx-auto px-4 py-8">
+        {/* Team shortcut to the management panel */}
+        {isAuthenticated && (
+          <Link href="/solicitacoes/painel">
+            <div className="flex items-center justify-between gap-3 bg-card border border-border rounded-lg p-4 mb-4 cursor-pointer hover-elevate" data-testid="link-painel">
+              <div className="flex items-center gap-3">
+                <ClipboardList className="w-5 h-5 text-primary shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold">Painel da equipe</p>
+                  <p className="text-xs text-muted-foreground">Acompanhe e gerencie as solicitações recebidas</p>
+                </div>
+              </div>
+              <ArrowRight className="w-4 h-4 text-muted-foreground shrink-0" />
+            </div>
+          </Link>
+        )}
+
         {/* Info banners */}
         <div className="space-y-3 mb-8">
           <div className="flex items-start gap-3 bg-primary/5 border border-primary/10 rounded-lg p-4">
@@ -333,18 +333,5 @@ export default function Home() {
         </footer>
       </main>
     </div>
-  );
-}
-
-function BdnLogo() {
-  return (
-    <img
-      src="/logo-bdn.png"
-      alt="Bola de Neve Church"
-      width={100}        // ← aumente conforme necessário (era 36)
-      height={22}        // ← ajuste para a proporção real do seu logo
-      className="object-contain"   // ← mantém proporção sem cortar
-      style={{ borderRadius: 0 }}  // ← remove os cantos arredondados
-    />
   );
 }

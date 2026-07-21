@@ -34,6 +34,17 @@ variable "lambda_timeout" {
   default     = 30
 }
 
+variable "jwt_secret" {
+  description = "Segredo usado para assinar os tokens de sessão (mínimo 32 caracteres). Defina via TF_VAR_jwt_secret — nunca versione o valor."
+  type        = string
+  sensitive   = true
+
+  validation {
+    condition     = length(var.jwt_secret) >= 32
+    error_message = "jwt_secret precisa ter ao menos 32 caracteres."
+  }
+}
+
 variable "cors_allowed_origins" {
   description = "Origens permitidas para o CORS no API Gateway"
   type        = list(string)

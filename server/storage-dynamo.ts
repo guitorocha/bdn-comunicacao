@@ -17,6 +17,10 @@ import {
   type Request, type InsertRequest,
   type Subtask, type InsertSubtask,
   type Comment, type InsertComment,
+  type Schedule, type InsertSchedule,
+  type Unavailability, type InsertUnavailability,
+  type ScheduleRole,
+  type UpdateProfile,
 } from "@shared/schema";
 
 import type { IStorage } from "./storage";
@@ -39,12 +43,31 @@ const TABLE_USERS    = process.env.TABLE_USERS    ?? "bdn-comunicacao-users";
 const TABLE_REQUESTS = process.env.TABLE_REQUESTS ?? "bdn-comunicacao-requests";
 const TABLE_SUBTASKS = process.env.TABLE_SUBTASKS ?? "bdn-comunicacao-subtasks";
 const TABLE_COMMENTS = process.env.TABLE_COMMENTS ?? "bdn-comunicacao-comments";
+const TABLE_SCHEDULES      = process.env.TABLE_SCHEDULES      ?? "bdn-comunicacao-schedules";
+const TABLE_UNAVAILABILITY = process.env.TABLE_UNAVAILABILITY ?? "bdn-comunicacao-unavailability";
+
+// Users created before the escalas/perfil features don't have all attributes
+function normalizeUser(item: Record<string, unknown> | undefined): User | undefined {
+  if (!item) return undefined;
+  const user = item as User;
+  return {
+    ...user,
+    roles: (item.roles as ScheduleRole[] | undefined) ?? [],
+    email: user.email ?? null,
+    phone: user.phone ?? null,
+    cellName: user.cellName ?? null,
+    cellLeaders: user.cellLeaders ?? null,
+  };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Geração de IDs únicos baseada em timestamp + random.
 // DynamoDB não possui auto-increment nativo.
 // Para o volume de uso (igreja local) isso é suficiente e seguro.
 // ─────────────────────────────────────────────────────────────────────────────
+// Profile fields start empty — the member fills them in on /usuarios
+const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: null };
+
 function generateId(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
 }
@@ -67,7 +90,7 @@ export class DynamoStorage implements IStorage {
       TableName: TABLE_USERS,
       Key: { id },
     }));
-    return result.Item as User | undefined;
+    return normalizeUser(result.Item);
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
@@ -78,20 +101,22 @@ export class DynamoStorage implements IStorage {
       ExpressionAttributeValues: { ":u": username },
       Limit: 1,
     }));
-    return result.Items?.[0] as User | undefined;
+    return normalizeUser(result.Items?.[0]);
   }
 
   async createUser(data: InsertUser): Promise<User> {
-    const user: User = { id: generateId(), ...data, isAdmin: false };
+    const user: User = { ...emptyProfile, id: generateId(), ...data, isAdmin: false, roles: data.roles ?? [] };
     await db.send(new PutCommand({ TableName: TABLE_USERS, Item: user }));
     return user;
   }
 
   async createUserAdmin(data: AdminCreateUser): Promise<User> {
     const user: User = {
+      ...emptyProfile,
       id: generateId(),
       ...data,
       isAdmin: data.isAdmin ?? false,
+      roles: data.roles ?? [],
     };
     await db.send(new PutCommand({ TableName: TABLE_USERS, Item: user }));
     return user;
@@ -99,7 +124,7 @@ export class DynamoStorage implements IStorage {
 
   async getAllUsers(): Promise<User[]> {
     const result = await db.send(new ScanCommand({ TableName: TABLE_USERS }));
-    return (result.Items ?? []) as User[];
+    return (result.Items ?? []).map((item) => normalizeUser(item)!) as User[];
   }
 
   async deleteUser(id: number): Promise<boolean> {
@@ -116,7 +141,59 @@ export class DynamoStorage implements IStorage {
       ConditionExpression: "attribute_exists(id)",
       ReturnValues: "ALL_NEW",
     }));
-    return result.Attributes as User | undefined;
+    return normalizeUser(result.Attributes);
+  }
+
+  async updateUserRoles(id: number, roles: ScheduleRole[]): Promise<User | undefined> {
+    // "roles" é palavra reservada no DynamoDB — usa alias #r
+    const result = await db.send(new UpdateCommand({
+      TableName: TABLE_USERS,
+      Key: { id },
+      UpdateExpression: "SET #r = :r",
+      ExpressionAttributeNames: { "#r": "roles" },
+      ExpressionAttributeValues: { ":r": roles },
+      ConditionExpression: "attribute_exists(id)",
+      ReturnValues: "ALL_NEW",
+    }));
+    return normalizeUser(result.Attributes);
+  }
+
+  async updateUserProfile(id: number, profile: UpdateProfile): Promise<User | undefined> {
+    const result = await db.send(new UpdateCommand({
+      TableName: TABLE_USERS,
+      Key: { id },
+      UpdateExpression: "SET #dn = :dn, #em = :em, #ph = :ph, #cn = :cn, #cl = :cl",
+      ExpressionAttributeNames: {
+        "#dn": "displayName",
+        "#em": "email",
+        "#ph": "phone",
+        "#cn": "cellName",
+        "#cl": "cellLeaders",
+      },
+      ExpressionAttributeValues: {
+        ":dn": profile.displayName,
+        ":em": profile.email || null,
+        ":ph": profile.phone || null,
+        ":cn": profile.cellName || null,
+        ":cl": profile.cellLeaders || null,
+      },
+      ConditionExpression: "attribute_exists(id)",
+      ReturnValues: "ALL_NEW",
+    }));
+    return normalizeUser(result.Attributes);
+  }
+
+  async updateUserPassword(id: number, password: string): Promise<User | undefined> {
+    const result = await db.send(new UpdateCommand({
+      TableName: TABLE_USERS,
+      Key: { id },
+      UpdateExpression: "SET #p = :p",
+      ExpressionAttributeNames: { "#p": "password" },
+      ExpressionAttributeValues: { ":p": password },
+      ConditionExpression: "attribute_exists(id)",
+      ReturnValues: "ALL_NEW",
+    }));
+    return normalizeUser(result.Attributes);
   }
 
   // ── Requests ─────────────────────────────────────────────────────────────
@@ -253,5 +330,92 @@ export class DynamoStorage implements IStorage {
     };
     await db.send(new PutCommand({ TableName: TABLE_COMMENTS, Item: comment }));
     return comment;
+  }
+
+  // ── Unavailability ────────────────────────────────────────────────────────
+
+  async getAllUnavailability(): Promise<Unavailability[]> {
+    const result = await db.send(new ScanCommand({ TableName: TABLE_UNAVAILABILITY }));
+    const items = (result.Items ?? []) as Unavailability[];
+    return items.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async getUnavailabilityByUser(userId: number): Promise<Unavailability[]> {
+    const result = await db.send(new QueryCommand({
+      TableName: TABLE_UNAVAILABILITY,
+      IndexName: "userId-index",
+      KeyConditionExpression: "userId = :u",
+      ExpressionAttributeValues: { ":u": userId },
+    }));
+    const items = (result.Items ?? []) as Unavailability[];
+    return items.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async createUnavailability(data: InsertUnavailability): Promise<Unavailability> {
+    // Evita duplicatas (mesmo usuário + mesma data)
+    const existing = await this.getUnavailabilityByUser(data.userId);
+    const duplicate = existing.find((u) => u.date === data.date);
+    if (duplicate) return duplicate;
+
+    const entry: Unavailability = {
+      id: generateId(),
+      ...data,
+      createdAt: new Date().toISOString(),
+    };
+    await db.send(new PutCommand({ TableName: TABLE_UNAVAILABILITY, Item: entry }));
+    return entry;
+  }
+
+  async getUnavailabilityEntry(id: number): Promise<Unavailability | undefined> {
+    const result = await db.send(new GetCommand({ TableName: TABLE_UNAVAILABILITY, Key: { id } }));
+    return result.Item as Unavailability | undefined;
+  }
+
+  async deleteUnavailability(id: number): Promise<boolean> {
+    await db.send(new DeleteCommand({ TableName: TABLE_UNAVAILABILITY, Key: { id } }));
+    return true;
+  }
+
+  // ── Schedules ─────────────────────────────────────────────────────────────
+
+  async getAllSchedules(): Promise<Schedule[]> {
+    const result = await db.send(new ScanCommand({ TableName: TABLE_SCHEDULES }));
+    const items = (result.Items ?? []) as Schedule[];
+    return items.sort((a, b) =>
+      `${a.eventDate} ${a.eventTime}`.localeCompare(`${b.eventDate} ${b.eventTime}`)
+    );
+  }
+
+  async getSchedule(id: number): Promise<Schedule | undefined> {
+    const result = await db.send(new GetCommand({ TableName: TABLE_SCHEDULES, Key: { id } }));
+    return result.Item as Schedule | undefined;
+  }
+
+  async createSchedule(data: InsertSchedule): Promise<Schedule> {
+    const schedule: Schedule = {
+      id: generateId(),
+      ...data,
+      notes: data.notes ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    await db.send(new PutCommand({ TableName: TABLE_SCHEDULES, Item: schedule }));
+    return schedule;
+  }
+
+  async updateSchedule(id: number, data: InsertSchedule): Promise<Schedule | undefined> {
+    const current = await db.send(new GetCommand({ TableName: TABLE_SCHEDULES, Key: { id } }));
+    if (!current.Item) return undefined;
+    const updated: Schedule = {
+      ...(current.Item as Schedule),
+      ...data,
+      notes: data.notes ?? null,
+    };
+    await db.send(new PutCommand({ TableName: TABLE_SCHEDULES, Item: updated }));
+    return updated;
+  }
+
+  async deleteSchedule(id: number): Promise<boolean> {
+    await db.send(new DeleteCommand({ TableName: TABLE_SCHEDULES, Key: { id } }));
+    return true;
   }
 }

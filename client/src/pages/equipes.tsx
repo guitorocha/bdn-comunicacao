@@ -21,8 +21,9 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { ArrowLeft, LogOut, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
-import { Link, useLocation, Redirect } from "wouter";
+import { ArrowLeft, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
+import { Link, Redirect } from "wouter";
+import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 
 interface SafeUser {
@@ -30,14 +31,17 @@ interface SafeUser {
   username: string;
   displayName: string;
   isAdmin: boolean;
+  email?: string | null;
+  phone?: string | null;
+  cellName?: string | null;
+  cellLeaders?: string | null;
 }
 
-export default function UsersPage() {
-  const { user, isAuthenticated, logout } = useAuth();
-  const [, navigate] = useLocation();
+export default function EquipesPage() {
+  const { user, isAuthenticated } = useAuth();
 
   if (!isAuthenticated) {
-    return <Redirect to="/login" />;
+    return <Redirect to="/login?next=/equipes" />;
   }
 
   if (!user?.isAdmin) {
@@ -47,9 +51,9 @@ export default function UsersPage() {
           <ShieldOff className="w-10 h-10 mx-auto text-muted-foreground/40" />
           <h2 className="text-lg font-bold">Acesso restrito</h2>
           <p className="text-sm text-muted-foreground">
-            Apenas administradores podem gerenciar usuários.
+            Apenas administradores podem gerenciar as equipes.
           </p>
-          <Link href="/admin">
+          <Link href="/solicitacoes/painel">
             <Button variant="ghost" size="sm">
               <ArrowLeft className="w-4 h-4 mr-1" /> Voltar ao painel
             </Button>
@@ -61,25 +65,13 @@ export default function UsersPage() {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/admin">
-              <Button variant="ghost" size="icon"><ArrowLeft className="w-4 h-4" /></Button>
-            </Link>
-            <div>
-              <h1 className="text-sm font-bold uppercase tracking-wider">Gerenciar Usuários</h1>
-              <p className="text-xs text-muted-foreground">Criar, remover e configurar acessos</p>
-            </div>
-          </div>
-          <Button variant="ghost" size="sm" onClick={() => { logout(); navigate("/"); }} data-testid="button-logout">
-            <LogOut className="w-4 h-4 mr-1" /> Sair
-          </Button>
-        </div>
-      </header>
+      <Navbar subtitle="Gerenciar Equipes" />
 
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-6">
+        <div>
+          <h2 className="text-lg font-bold uppercase tracking-wider">Gerenciar Equipes</h2>
+          <p className="text-sm text-muted-foreground">Criar, remover e configurar acessos da equipe.</p>
+        </div>
         <CreateUserForm />
         <UserList currentUserId={user.id} />
 
@@ -106,10 +98,6 @@ function CreateUserForm() {
         password: password.trim(),
         isAdmin,
       });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.message || "Erro ao criar usuário");
-      }
       return res.json();
     },
     onSuccess: () => {
@@ -266,7 +254,16 @@ function UserList({ currentUserId }: { currentUserId: number }) {
                     <Badge variant="outline" className="text-xs">Você</Badge>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground">@{u.username}</p>
+                <p className="text-xs text-muted-foreground">
+                  @{u.username}
+                  {u.cellName && <> · Célula {u.cellName}</>}
+                  {u.cellLeaders && <> ({u.cellLeaders})</>}
+                </p>
+                {(u.email || u.phone) && (
+                  <p className="text-xs text-muted-foreground truncate">
+                    {[u.email, u.phone].filter(Boolean).join(" · ")}
+                  </p>
+                )}
               </div>
 
               <div className="flex items-center gap-2 shrink-0">

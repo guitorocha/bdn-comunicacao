@@ -55,6 +55,10 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
           "${aws_dynamodb_table.subtasks.arn}/index/*",
           aws_dynamodb_table.comments.arn,
           "${aws_dynamodb_table.comments.arn}/index/*",
+          aws_dynamodb_table.schedules.arn,
+          "${aws_dynamodb_table.schedules.arn}/index/*",
+          aws_dynamodb_table.unavailability.arn,
+          "${aws_dynamodb_table.unavailability.arn}/index/*",
         ]
       }
     ]
@@ -84,11 +88,14 @@ resource "aws_lambda_function" "backend" {
   environment {
     variables = {
       NODE_ENV            = var.environment
+      JWT_SECRET          = var.jwt_secret
       DYNAMODB_REGION     = var.aws_region
       TABLE_USERS         = aws_dynamodb_table.users.name
       TABLE_REQUESTS      = aws_dynamodb_table.requests.name
       TABLE_SUBTASKS      = aws_dynamodb_table.subtasks.name
       TABLE_COMMENTS      = aws_dynamodb_table.comments.name
+      TABLE_SCHEDULES      = aws_dynamodb_table.schedules.name
+      TABLE_UNAVAILABILITY = aws_dynamodb_table.unavailability.name
       STAGE               = aws_apigatewayv2_stage.default.name
     }
   }

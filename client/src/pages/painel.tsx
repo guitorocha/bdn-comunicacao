@@ -12,10 +12,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
-  ArrowLeft, Calendar, CheckCircle2, ChevronRight, Circle, Clock,
-  Hash, LogOut, MessageSquare, Plus, Send, Trash2, User, Users
+  Calendar, CheckCircle2, ChevronRight, Clock,
+  Hash, MessageSquare, Plus, Send, Trash2, User
 } from "lucide-react";
-import { Link, useLocation, Redirect } from "wouter";
+import { Redirect } from "wouter";
+import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import type { Request, Subtask, Comment } from "@shared/schema";
 import { format } from "date-fns";
@@ -35,46 +36,24 @@ const statusColors: Record<string, string> = {
   cancelada: "bg-red-500/10 text-red-500 border-red-500/20",
 };
 
-export default function Admin() {
-  const { user, isAuthenticated, logout } = useAuth();
-  const [, navigate] = useLocation();
+export default function Painel() {
+  const { user, isAuthenticated } = useAuth();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>("todos");
 
   if (!isAuthenticated) {
-    return <Redirect to="/login" />;
+    return <Redirect to="/login?next=/solicitacoes/painel" />;
   }
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/">
-              <Button variant="ghost" size="icon"><ArrowLeft className="w-4 h-4" /></Button>
-            </Link>
-            <div>
-              <h1 className="text-sm font-bold uppercase tracking-wider">Painel da Comunicação</h1>
-              <p className="text-xs text-muted-foreground">Olá, {user?.displayName}</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            {user?.isAdmin && (
-              <Link href="/usuarios">
-                <Button variant="outline" size="sm" data-testid="button-manage-users">
-                  <Users className="w-4 h-4 mr-1" /> Usuários
-                </Button>
-              </Link>
-            )}
-            <Button variant="ghost" size="sm" onClick={() => { logout(); navigate("/"); }} data-testid="button-logout">
-              <LogOut className="w-4 h-4 mr-1" /> Sair
-            </Button>
-          </div>
-        </div>
-      </header>
+      <Navbar subtitle="Painel de Solicitações" />
 
       <main className="max-w-6xl mx-auto px-4 py-6">
+        <div className="mb-6">
+          <h2 className="text-lg font-bold uppercase tracking-wider">Painel de Solicitações</h2>
+          <p className="text-sm text-muted-foreground">Olá, {user?.displayName} — acompanhe e gerencie as solicitações de divulgação.</p>
+        </div>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Request List */}
           <div className="lg:col-span-1 space-y-4">

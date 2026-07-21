@@ -1,24 +1,34 @@
-import { Switch, Route, Router } from "wouter";
+import { Switch, Route, Router, Redirect } from "wouter";
 import { useHashLocation } from "wouter/use-hash-location";
 import { queryClient } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
-import Home from "@/pages/home";
+import Landing from "@/pages/landing";
+import Solicitacoes from "@/pages/solicitacoes";
+import Escalas from "@/pages/escalas";
 import Tracking from "@/pages/tracking";
 import Login from "@/pages/login";
-import Admin from "@/pages/admin";
-import UsersPage from "@/pages/users";
+import Painel from "@/pages/painel";
+import Equipes from "@/pages/equipes";
+import Usuarios from "@/pages/usuarios";
 import NotFound from "@/pages/not-found";
 
 function AppRouter() {
   return (
     <Switch>
-      <Route path="/" component={Home} />
+      <Route path="/" component={Landing} />
+      <Route path="/solicitacoes/painel" component={Painel} />
+      <Route path="/solicitacoes" component={Solicitacoes} />
+      <Route path="/escalas" component={Escalas} />
       <Route path="/acompanhar" component={Tracking} />
       <Route path="/login" component={Login} />
-      <Route path="/admin" component={Admin} />
-      <Route path="/usuarios" component={UsersPage} />
+      {/* Rota antiga do painel — mantém links salvos funcionando */}
+      <Route path="/admin">
+        <Redirect to="/solicitacoes/painel" />
+      </Route>
+      <Route path="/equipes" component={Equipes} />
+      <Route path="/usuarios" component={Usuarios} />
       <Route component={NotFound} />
     </Switch>
   );

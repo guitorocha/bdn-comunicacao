@@ -7,8 +7,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Calendar, CheckCircle2, Circle, Clock, Hash, MessageSquare, Search, User } from "lucide-react";
-import { Link } from "wouter";
+import { Calendar, CheckCircle2, Circle, Clock, Hash, MessageSquare, Search, User } from "lucide-react";
+import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
 import type { Request, Subtask, Comment } from "@shared/schema";
 import { format } from "date-fns";
@@ -77,22 +77,7 @@ export default function Tracking() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Link href="/">
-              <Button variant="ghost" size="icon"><ArrowLeft className="w-4 h-4" /></Button>
-            </Link>
-            <div>
-              <h1 className="text-sm font-bold uppercase tracking-wider">Acompanhamento</h1>
-              <p className="text-xs text-muted-foreground">Consulte sua solicitação</p>
-            </div>
-          </div>
-          <Link href="/admin">
-            <Button variant="ghost" size="sm">Equipe</Button>
-          </Link>
-        </div>
-      </header>
+      <Navbar subtitle="Acompanhamento de Solicitação" />
 
       <main className="max-w-3xl mx-auto px-4 py-8 space-y-6">
         {/* Search */}

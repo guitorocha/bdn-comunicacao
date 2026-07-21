@@ -29,9 +29,14 @@ export default function Login() {
       const res = await apiRequest("POST", "/api/auth/login", data);
       return await res.json();
     },
-    onSuccess: (user) => {
-      login(user);
-      navigate("/admin");
+    onSuccess: ({ token, user }) => {
+      login(user, token);
+      // Volta para a página que pediu o login (?next=...), senão vai às escalas.
+      // O wouter (useHashLocation) guarda a query real em window.location.search,
+      // não no hash — por isso lemos de search aqui.
+      const params = new URLSearchParams(window.location.search);
+      const next = params.get("next");
+      navigate(next && next.startsWith("/") ? next : "/escalas");
     },
     onError: () => {
       toast({ title: "Erro de autenticação", description: "Usuário ou senha inválidos.", variant: "destructive" });
@@ -66,7 +71,7 @@ export default function Login() {
         <div className="text-center">
           <Link href="/">
             <Button variant="ghost" size="sm" className="text-muted-foreground">
-              <ArrowLeft className="w-4 h-4 mr-1" /> Voltar ao formulário
+              <ArrowLeft className="w-4 h-4 mr-1" /> Voltar ao início
             </Button>
           </Link>
         </div>
