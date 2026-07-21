@@ -30,8 +30,8 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useToast } from "@/hooks/use-toast";
-import { PASSWORD_MIN_LENGTH, isRootAdmin, passwordIssue, ROOT_ADMIN_USERNAME } from "@shared/schema";
-import { ArrowLeft, KeyRound, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
+import { MAX_FAILED_LOGINS, PASSWORD_MIN_LENGTH, isRootAdmin, passwordIssue, ROOT_ADMIN_USERNAME } from "@shared/schema";
+import { ArrowLeft, KeyRound, Lock, LockOpen, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
 import { Link, Redirect } from "wouter";
 import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
@@ -42,6 +42,9 @@ interface SafeUser {
   displayName: string;
   isAdmin: boolean;
   mustChangePassword?: boolean;
+  // Bloqueio por senhas erradas: `lockedAt` preenchido = conta travada
+  failedLoginCount?: number;
+  lockedAt?: string | null;
   email?: string | null;
   phone?: string | null;
   cellName?: string | null;
@@ -326,6 +329,22 @@ function UserList({ currentUserId }: { currentUserId: number }) {
     },
   });
 
+  // Desbloqueio: a conta trava de vez depois de MAX_FAILED_LOGINS senhas
+  // erradas seguidas, e só um admin devolve o acesso.
+  const unlockMutation = useMutation({
+    mutationFn: async (id: number) => {
+      const res = await apiRequest("POST", `/api/users/${id}/unlock`);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Conta desbloqueada", description: "O usuário já pode entrar com a senha atual." });
+      queryClient.invalidateQueries({ queryKey: ["/api/users"] });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Erro", description: err.message, variant: "destructive" });
+    },
+  });
+
   const toggleAdminMutation = useMutation({
     mutationFn: async ({ id, isAdmin }: { id: number; isAdmin: boolean }) => {
       const res = await apiRequest("PATCH", `/api/users/${id}/admin`, { isAdmin });
@@ -364,6 +383,7 @@ function UserList({ currentUserId }: { currentUserId: number }) {
           const isSelf = u.id === currentUserId;
           // A conta raiz é a via de recuperação: não se apaga nem se rebaixa
           const isRoot = isRootAdmin(u);
+          const locked = Boolean(u.lockedAt);
           return (
             <div
               key={u.id}
@@ -381,6 +401,15 @@ function UserList({ currentUserId }: { currentUserId: number }) {
                   )}
                   {isSelf && (
                     <Badge variant="outline" className="text-xs">Você</Badge>
+                  )}
+                  {locked && (
+                    <Badge
+                      variant="outline"
+                      className="text-xs text-destructive border-destructive/40 gap-1"
+                      title={`Bloqueada em ${new Date(u.lockedAt!).toLocaleString("pt-BR")} após ${MAX_FAILED_LOGINS} senhas incorretas seguidas`}
+                    >
+                      <Lock className="w-3 h-3" /> Bloqueado
+                    </Badge>
                   )}
                   {u.mustChangePassword && (
                     <Badge variant="outline" className="text-xs text-muted-foreground" title="Senha definida por um admin — o usuário precisa trocá-la">
@@ -422,6 +451,43 @@ function UserList({ currentUserId }: { currentUserId: number }) {
                 </div>
 
                 <Separator orientation="vertical" className="h-6" />
+
+                {/* Desbloqueio — só aparece quando há bloqueio a desfazer */}
+                {locked && (
+                  <AlertDialog>
+                    <AlertDialogTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        title="Desbloquear conta"
+                        className="text-destructive hover:text-destructive"
+                        data-testid={`button-unlock-user-${u.id}`}
+                      >
+                        <LockOpen className="w-4 h-4" />
+                      </Button>
+                    </AlertDialogTrigger>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Desbloquear conta?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          A conta de <strong>{u.displayName}</strong> (@{u.username}) foi bloqueada
+                          após {MAX_FAILED_LOGINS} tentativas de senha incorretas seguidas. Confirme
+                          com a pessoa que foi ela quem tentou entrar antes de liberar — se não foi,
+                          alguém está tentando adivinhar a senha, e o caminho é redefini-la.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                        <AlertDialogAction
+                          onClick={() => unlockMutation.mutate(u.id)}
+                          data-testid={`button-confirm-unlock-${u.id}`}
+                        >
+                          Desbloquear
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+                )}
 
                 {/* Reset de senha */}
                 <ResetPasswordDialog user={u} isSelf={isSelf} />

@@ -1,9 +1,10 @@
 import type { Express, Request as ExpressRequest, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isRootAdmin, passwordIssue, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, type User } from "@shared/schema";
+import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isLocked, isRootAdmin, passwordIssue, MAX_FAILED_LOGINS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, type User } from "@shared/schema";
 import { z } from "zod";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
+import { recordAudit } from "./audit";
 import { hashPassword, isHashed, verifyPassword } from "./password";
 import {
   SESSION_COOKIE,
@@ -92,6 +93,9 @@ async function resolveRequestUser(req: ExpressRequest): Promise<User | undefined
   if (!user) return undefined;
   // Token emitido antes da última troca de senha deixa de valer
   if (!matchesCurrentPassword(payload, user)) return undefined;
+  // Bloquear a conta precisa derrubar o que já estava aberto — senão a sessão
+  // do atacante sobrevive justamente ao bloqueio que existe por causa dele.
+  if (isLocked(user)) return undefined;
   return user;
 }
 
@@ -124,9 +128,53 @@ export async function registerRoutes(
       return res.status(400).json({ message: "Usuário e senha são obrigatórios" });
     }
     const found = await storage.getUserByUsername(username);
+
+    // Conta bloqueada não passa nem com a senha certa. A mensagem entrega que a
+    // conta existe, e isso é deliberado: quem está trancado do lado de fora
+    // precisa saber por quê e a quem pedir. O bloqueio em si já tira valor da
+    // enumeração — a conta não abre de qualquer forma.
+    if (found && isLocked(found)) {
+      await recordAudit(req, { action: "login.blocked", target: found });
+      return res.status(403).json({
+        message: "Conta bloqueada por tentativas de senha incorretas. Peça a um administrador para desbloqueá-la.",
+      });
+    }
+
     if (!found || !verifyPassword(password, found.password)) {
+      if (found) {
+        // Erros seguidos somam; ao chegar no limite a conta trava de vez.
+        const failedLoginCount = found.failedLoginCount + 1;
+        const lockNow = failedLoginCount >= MAX_FAILED_LOGINS;
+        await storage.updateUserLockState(found.id, {
+          failedLoginCount,
+          lockedAt: lockNow ? new Date().toISOString() : null,
+        });
+        await recordAudit(req, {
+          action: "login.failure",
+          target: found,
+          detail: `tentativa ${failedLoginCount}/${MAX_FAILED_LOGINS}`,
+        });
+        if (lockNow) {
+          await recordAudit(req, {
+            action: "account.locked",
+            target: found,
+            detail: `${MAX_FAILED_LOGINS} tentativas incorretas consecutivas`,
+          });
+        }
+      } else {
+        await recordAudit(req, { action: "login.failure", targetName: String(username), detail: "usuário inexistente" });
+      }
       return res.status(401).json({ message: "Credenciais inválidas" });
     }
+
+    // Senha certa: o histórico de erros zera, senão erros espalhados por meses
+    // acabariam bloqueando quem só digitou errado de vez em quando.
+    if (found.failedLoginCount > 0) {
+      await storage.updateUserLockState(found.id, { failedLoginCount: 0, lockedAt: null });
+      found.failedLoginCount = 0;
+    }
+    await recordAudit(req, { action: "login.success", actor: found, target: found });
+
     // Senhas antigas ficaram em texto puro — migra para hash no primeiro login.
     // O token é assinado depois, sobre o hash já gravado.
     let user = found;
@@ -209,6 +257,7 @@ export async function registerRoutes(
     // A senha agora é escolha do dono: cai a obrigação de trocá-la
     const updated = await storage.updateUserPassword(user.id, hashPassword(parsed.data.newPassword), false);
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+    await recordAudit(req, { action: "password.change", actor: user, target: user });
     // A troca derruba os tokens antigos (inclusive em outros dispositivos);
     // reemite o cookie para quem acabou de trocar continuar na sessão.
     setSessionCookie(res, updated);
@@ -230,6 +279,12 @@ export async function registerRoutes(
         ...data,
         password: hashPassword(data.password),
         mustChangePassword: true,
+      });
+      await recordAudit(req, {
+        action: "user.create",
+        actor: (req as AuthedRequest).authUser!,
+        target: user,
+        detail: user.isAdmin ? "criado como administrador" : null,
       });
       const { password, ...safeUser } = user;
       return res.status(201).json(safeUser);
@@ -271,12 +326,29 @@ export async function registerRoutes(
 
     // Redefinindo a própria senha, quem escolheu foi o dono: nada a forçar.
     const isSelf = target.id === actor.id;
-    const updated = await storage.updateUserPassword(
+    let updated = await storage.updateUserPassword(
       target.id,
       hashPassword(parsed.data.newPassword),
       !isSelf,
     );
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+
+    // Senha nova zera o histórico de erros e libera a conta: o reset é a outra
+    // saída para quem se bloqueou, além do desbloqueio puro e simples.
+    if (updated.failedLoginCount > 0 || isLocked(updated)) {
+      const wasLocked = isLocked(updated);
+      updated = (await storage.updateUserLockState(target.id, { failedLoginCount: 0, lockedAt: null })) ?? updated;
+      if (wasLocked) {
+        await recordAudit(req, { action: "account.unlocked", actor, target, detail: "desbloqueio via redefinição de senha" });
+      }
+    }
+
+    await recordAudit(req, {
+      action: "password.reset",
+      actor,
+      target,
+      detail: isSelf ? "redefiniu a própria senha" : null,
+    });
 
     // O reset invalida os tokens do alvo — inclusive o do próprio admin, se foi
     // a senha dele: reemite o cookie para ele não cair da sessão.
@@ -284,6 +356,39 @@ export async function registerRoutes(
 
     const { password, ...safeUser } = updated;
     return res.json({ success: true, user: safeUser });
+  });
+
+  // Desbloqueio de conta. O bloqueio por senhas erradas é permanente — não há
+  // prazo que o desfaça sozinho, justamente para não dar ao atacante a chance de
+  // voltar depois. Qualquer admin libera, inclusive a conta raiz: sem isso, oito
+  // palpites errados em @admin trancariam a via de recuperação do sistema e a
+  // única saída seria editar o DynamoDB na mão.
+  app.post("/api/users/:id/unlock", requireAdmin, async (req, res) => {
+    const actor = (req as AuthedRequest).authUser!;
+    const id = parseInt(req.params.id, 10);
+    if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
+
+    const target = await storage.getUser(id);
+    if (!target) return res.status(404).json({ message: "Usuário não encontrado" });
+    if (!isLocked(target) && target.failedLoginCount === 0) {
+      return res.status(409).json({ message: "A conta não está bloqueada" });
+    }
+
+    const updated = await storage.updateUserLockState(id, { failedLoginCount: 0, lockedAt: null });
+    if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+
+    await recordAudit(req, { action: "account.unlocked", actor, target });
+
+    const { password, ...safeUser } = updated;
+    return res.json({ success: true, user: safeUser });
+  });
+
+  // Leitura da trilha de auditoria — só admin. Append-only: não há rota que
+  // altere ou apague uma entrada.
+  app.get("/api/audit", requireAdmin, async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? "100"), 10) || 100, 1), 500);
+    const entries = await storage.getRecentAuditEntries(limit);
+    return res.json(entries);
   });
 
   app.delete("/api/users/:id", requireAdmin, async (req, res) => {
@@ -301,6 +406,11 @@ export async function registerRoutes(
 
     const deleted = await storage.deleteUser(id);
     if (!deleted) return res.status(404).json({ message: "Usuário não encontrado" });
+    await recordAudit(req, {
+      action: "user.delete",
+      actor: (req as AuthedRequest).authUser!,
+      target,
+    });
     return res.json({ success: true });
   });
 
@@ -336,6 +446,11 @@ export async function registerRoutes(
 
     const updated = await storage.updateUserAdmin(id, isAdmin);
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+    await recordAudit(req, {
+      action: isAdmin ? "admin.grant" : "admin.revoke",
+      actor: (req as AuthedRequest).authUser!,
+      target: updated,
+    });
     const { password, ...safeUser } = updated;
     return res.json(safeUser);
   });

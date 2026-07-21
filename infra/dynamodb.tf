@@ -154,6 +154,31 @@ resource "aws_dynamodb_table" "unavailability" {
   }
 }
 
+# ── Tabela: audit ──
+# PK: id (Number) — trilha append-only de login, bloqueio e ações de admin.
+# Sem GSI: o volume é pequeno e a leitura é sempre "as últimas N entradas".
+# A política IAM da Lambda concede apenas PutItem/Scan aqui — nada de
+# UpdateItem ou DeleteItem, para que a trilha não possa ser reescrita.
+resource "aws_dynamodb_table" "audit" {
+  name         = "${var.app_name}-audit"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "N"
+  }
+
+  # A trilha é a prova depois de um incidente: apagá-la por engano é caro
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  tags = {
+    Table = "audit"
+  }
+}
+
 # ── Tabela: schedules ──
 # PK: id (Number) — escalas de cultos e eventos especiais
 resource "aws_dynamodb_table" "schedules" {

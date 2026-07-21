@@ -21,6 +21,7 @@ import {
   type Unavailability, type InsertUnavailability,
   type ScheduleRole,
   type UpdateProfile,
+  type AuditEntry, type InsertAuditEntry,
 } from "@shared/schema";
 
 import type { IStorage } from "./storage";
@@ -45,6 +46,7 @@ const TABLE_SUBTASKS = process.env.TABLE_SUBTASKS ?? "bdn-comunicacao-subtasks";
 const TABLE_COMMENTS = process.env.TABLE_COMMENTS ?? "bdn-comunicacao-comments";
 const TABLE_SCHEDULES      = process.env.TABLE_SCHEDULES      ?? "bdn-comunicacao-schedules";
 const TABLE_UNAVAILABILITY = process.env.TABLE_UNAVAILABILITY ?? "bdn-comunicacao-unavailability";
+const TABLE_AUDIT          = process.env.TABLE_AUDIT          ?? "bdn-comunicacao-audit";
 
 // Users created before the escalas/perfil features don't have all attributes
 function normalizeUser(item: Record<string, unknown> | undefined): User | undefined {
@@ -60,6 +62,9 @@ function normalizeUser(item: Record<string, unknown> | undefined): User | undefi
     // Contas anteriores à troca obrigatória não têm o atributo — não é para
     // barrar quem já escolheu a própria senha.
     mustChangePassword: user.mustChangePassword ?? false,
+    // Idem para o bloqueio: sem o atributo, a conta está liberada e sem erros
+    failedLoginCount: user.failedLoginCount ?? 0,
+    lockedAt: user.lockedAt ?? null,
   };
 }
 
@@ -70,6 +75,9 @@ function normalizeUser(item: Record<string, unknown> | undefined): User | undefi
 // ─────────────────────────────────────────────────────────────────────────────
 // Profile fields start empty — the member fills them in on /usuarios
 const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: null };
+
+// Conta nova nasce liberada e sem histórico de erro
+const unlocked = { failedLoginCount: 0, lockedAt: null };
 
 function generateId(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
@@ -110,6 +118,7 @@ export class DynamoStorage implements IStorage {
   async createUser(data: InsertUser): Promise<User> {
     const user: User = {
       ...emptyProfile,
+      ...unlocked,
       id: generateId(),
       ...data,
       isAdmin: false,
@@ -123,6 +132,7 @@ export class DynamoStorage implements IStorage {
   async createUserAdmin(data: AdminCreateUser & { mustChangePassword?: boolean }): Promise<User> {
     const user: User = {
       ...emptyProfile,
+      ...unlocked,
       id: generateId(),
       ...data,
       isAdmin: data.isAdmin ?? false,
@@ -205,6 +215,40 @@ export class DynamoStorage implements IStorage {
       ReturnValues: "ALL_NEW",
     }));
     return normalizeUser(result.Attributes);
+  }
+
+  async updateUserLockState(
+    id: number,
+    state: { failedLoginCount: number; lockedAt: string | null },
+  ): Promise<User | undefined> {
+    const result = await db.send(new UpdateCommand({
+      TableName: TABLE_USERS,
+      Key: { id },
+      UpdateExpression: "SET #f = :f, #l = :l",
+      ExpressionAttributeNames: { "#f": "failedLoginCount", "#l": "lockedAt" },
+      ExpressionAttributeValues: { ":f": state.failedLoginCount, ":l": state.lockedAt },
+      ConditionExpression: "attribute_exists(id)",
+      ReturnValues: "ALL_NEW",
+    }));
+    return normalizeUser(result.Attributes);
+  }
+
+  // ── Auditoria ─────────────────────────────────────────────────────────────
+  // Append-only: só há escrita e leitura. Nada aqui é atualizado ou apagado — a
+  // IAM da Lambda também não concede DeleteItem nesta tabela.
+
+  async createAuditEntry(entry: InsertAuditEntry): Promise<AuditEntry> {
+    const record: AuditEntry = { id: generateId(), at: new Date().toISOString(), ...entry };
+    await db.send(new PutCommand({ TableName: TABLE_AUDIT, Item: record }));
+    return record;
+  }
+
+  async getRecentAuditEntries(limit: number): Promise<AuditEntry[]> {
+    // Scan + ordenação em memória: no volume desta igreja a tabela é pequena.
+    // Se um dia crescer, o caminho é um GSI por dia (hash "at" truncado).
+    const result = await db.send(new ScanCommand({ TableName: TABLE_AUDIT }));
+    const items = (result.Items ?? []) as AuditEntry[];
+    return items.sort((a, b) => b.at.localeCompare(a.at)).slice(0, limit);
   }
 
   // ── Requests ─────────────────────────────────────────────────────────────

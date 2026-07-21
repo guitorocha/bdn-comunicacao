@@ -60,6 +60,23 @@ resource "aws_iam_role_policy" "lambda_dynamodb" {
           aws_dynamodb_table.unavailability.arn,
           "${aws_dynamodb_table.unavailability.arn}/index/*",
         ]
+      },
+      {
+        # A trilha de auditoria é append-only: a Lambda escreve e lê, mas não
+        # tem como alterar nem apagar uma entrada. Uma conta de admin
+        # comprometida não consegue varrer os próprios rastros pela aplicação.
+        Sid    = "DynamoDBAuditAppendOnly"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = [
+          aws_dynamodb_table.audit.arn,
+          "${aws_dynamodb_table.audit.arn}/index/*",
+        ]
       }
     ]
   })
@@ -96,6 +113,7 @@ resource "aws_lambda_function" "backend" {
       TABLE_COMMENTS      = aws_dynamodb_table.comments.name
       TABLE_SCHEDULES      = aws_dynamodb_table.schedules.name
       TABLE_UNAVAILABILITY = aws_dynamodb_table.unavailability.name
+      TABLE_AUDIT          = aws_dynamodb_table.audit.name
       STAGE               = aws_apigatewayv2_stage.default.name
     }
   }

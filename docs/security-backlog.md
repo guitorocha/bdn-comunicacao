@@ -6,6 +6,7 @@ Written 2026-07-20, after the session that added password hashing and JWT sessio
 Updated 2026-07-20 (same day): items 2, 4, 6, 7, 8, 9.4, 10 and 11 are now implemented — see below.
 Updated 2026-07-21: item 5 is implemented — the session moved to an `HttpOnly` cookie.
 Updated 2026-07-21 (same day): item 6 is closed — forced password change plus an admin reset endpoint (item 6.5 was built as an admin reset, not the e-mail flow).
+Updated 2026-07-21 (same day): item 9 is closed — audit trail plus **permanent** account lockout after 8 consecutive failed logins, with an admin unlock.
 
 ## Already done (context, no action needed)
 
@@ -25,6 +26,7 @@ Updated 2026-07-21 (same day): item 6 is closed — forced password change plus 
 - **CORS no longer wildcard** (item 10) — defaults to `[]`, since the app is same-origin through CloudFront.
 - **Security headers** (item 11) — `helmet` on both entry points, CSP still off pending tuning.
 - **Session in an `HttpOnly` cookie** (item 5) — the token is out of `localStorage` and out of JavaScript's reach.
+- **Audit trail and permanent account lockout** (item 9) — an append-only `audit` table records logins, failures, lockouts and every admin action on accounts; 8 consecutive failed logins lock an account until an admin unlocks it on `/equipes`.
 
 ---
 
@@ -306,9 +308,25 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 
 ## 9. No audit trail, no account lockout
 
-**Status: step 4 done, steps 1-3 still open.** The request logger was writing every response body to CloudWatch — including the login response, session token and all, and the whole team's e-mails and phone numbers on `/api/users`. It now logs method, path, status and duration only. Request bodies were never logged, so the login password was not exposed.
+**Status: done — step 3 was deliberately changed from a temporary lock to a permanent one.**
 
-**Still to do:** the `audit` table (steps 1-2) and account lockout (step 3). Note that item 4's per-account rate limit now covers part of what lockout was for.
+**Steps 1-2 (audit trail) — done.** An append-only `audit` table (`infra/dynamodb.tf`, point-in-time recovery on) holds `id`, `at`, `action`, `actorId`/`actorName`, `targetId`/`targetName`, `ip`, `detail`. Writes go through `recordAudit()` in [`server/audit.ts`](../server/audit.ts), which **never fails the operation it records** — a broken audit write logs to CloudWatch and the login (or reset, or delete) still goes through. Eleven actions are recorded: `login.success`, `login.failure`, `login.blocked`, `account.locked`, `account.unlocked`, `password.change`, `password.reset`, `user.create`, `user.delete`, `admin.grant`, `admin.revoke`. Reading is `GET /api/audit?limit=N` (`requireAdmin`, capped at 500).
+
+The trail is append-only in more than name: the Lambda's IAM policy grants `PutItem`/`GetItem`/`Query`/`Scan` on that table and **not** `UpdateItem` or `DeleteItem`, and no route mutates an entry. A compromised admin session cannot erase its own tracks through the app.
+
+**Step 3 (lockout) — done, permanent instead of 15 minutes.** `failedLoginCount` and `lockedAt` live on the user record; `MAX_FAILED_LOGINS = 8` in [`shared/schema.ts`](../shared/schema.ts). Eight consecutive wrong passwords set `lockedAt` and the account stays locked until an admin releases it — there is no timer that reopens it. A correct password resets the counter to 0, so occasional typos spread over months never accumulate into a lock.
+
+Three consequences worth knowing:
+
+- **A locked account's open sessions die immediately.** `resolveRequestUser` rejects a locked user, so locking is not just a login-door check — otherwise the attacker's session would outlive the lock that exists because of them.
+- **A locked account gets 403 with an explanatory message, not 401.** This does confirm the username exists. That's deliberate: someone locked out needs to know why the right password stopped working and who to ask, and the lock itself removes the value of the enumeration — the account doesn't open either way.
+- **Two ways back in:** `POST /api/users/:id/unlock` (`requireAdmin`), or an admin password reset, which clears the lock as a side effect. Both write `account.unlocked` to the trail.
+
+**⚠️ The root `admin` account is lockable too, and that's a real tradeoff.** Anyone who knows the username can burn eight guesses and lock it. It is *not* exempted, because an unlockable account is exactly the one worth brute-forcing, and the per-account rate limit alone doesn't stop a slow attempt. Any admin can unlock any account **including root**, so the ordinary recovery path is another admin. If root is the only admin and gets locked, the way back is a direct DynamoDB edit (`lockedAt` → removed) — the same fallback item 6 already documents for a lost root password. **Keep a second admin account** so that never comes up.
+
+**UI:** a locked row on [`client/src/pages/equipes.tsx`](../client/src/pages/equipes.tsx) shows a red "Bloqueado" badge (hover for the timestamp) and an unlock button, behind a confirm dialog that tells the admin to check with the person first — if it wasn't them typing, someone is guessing and the answer is a reset, not an unlock. The login page now shows the server's message instead of a hardcoded "usuário ou senha inválidos", which is how the lock explanation reaches the person.
+
+**Left open (nice to have):** no UI for reading the trail — `GET /api/audit` is there, but seeing it means calling the endpoint. A small admin screen would make it useful in practice. Also, nothing prunes the table; at this volume it will take years to matter, and a TTL attribute is the fix when it does.
 
 **Severity: medium.**
 
@@ -318,10 +336,12 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 
 1. Add an append-only `audit` table (Terraform: copy the pattern in [`infra/dynamodb.tf`](../infra/dynamodb.tf)) with `id`, `at`, `actorId`, `action`, `targetId`, `ip`.
 2. Write an entry on: login success, login failure, password change, user create/delete, admin grant/revoke.
-3. Add `failedLoginCount` and `lockedUntil` to the user record; lock for 15 minutes after ~8 consecutive failures and reset the counter on success.
+3. ~~Add `failedLoginCount` and `lockedUntil`; lock for 15 minutes after ~8 consecutive failures~~ — **changed to a permanent lock**: `lockedAt` is set at 8 consecutive failures and only an admin clears it. A timed lock only makes the attacker wait; it buys time, it doesn't end the attempt. Permanent means a human notices and decides.
 4. Never log passwords or tokens. Confirm the request logger in [`server/index.ts`](../server/index.ts) doesn't dump request bodies to CloudWatch — check before deploying, since the login body contains a password.
 
-**Verify:** a failed login writes an audit row; 8 failures lock the account; the log output contains no password.
+**Verify:** all of the below was run against the dev server. 8 consecutive wrong passwords → 401 each, `lockedAt` set on the 8th; the *correct* password afterwards → 403 with the lock message; a session opened before the lock → 401 on the next request; admin unlock → 200 and the correct password works again; unlocking an account that isn't locked → 409; an admin password reset also clears the lock. The trail recorded the whole sequence (`login.failure` ×8 with `tentativa N/8`, `account.locked`, `login.blocked`, `account.unlocked`, `login.success`) plus `user.create`/`admin.grant`/`admin.revoke`/`user.delete` from an admin session. `GET /api/audit` is 401 without a session and 403 for a volunteer. Grepping the trail and the server log for the test passwords and the session cookie returned zero hits.
+
+**Deploy note:** `terraform apply` must run before the new Lambda code — the audit table and the `TABLE_AUDIT` env var are new. Existing user records have no `failedLoginCount`/`lockedAt`; `normalizeUser` reads them as `0`/`null`, so nobody is locked by the deploy.
 
 ---
 

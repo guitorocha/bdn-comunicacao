@@ -49,8 +49,15 @@ export default function Login() {
       const next = params.get("next");
       navigate(next && next.startsWith("/") ? next : "/escalas");
     },
-    onError: () => {
-      toast({ title: "Erro de autenticação", description: "Usuário ou senha inválidos.", variant: "destructive" });
+    onError: (err: Error) => {
+      // A mensagem vem do servidor: além de "credenciais inválidas", ela explica
+      // a conta bloqueada por tentativas — sem isso a pessoa fica sem saber por
+      // que a senha certa não entra, nem que precisa procurar um admin.
+      toast({
+        title: "Erro de autenticação",
+        description: err.message || "Usuário ou senha inválidos.",
+        variant: "destructive",
+      });
     },
   });
 

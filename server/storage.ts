@@ -7,6 +7,7 @@ import {
   type Unavailability, type InsertUnavailability,
   type ScheduleRole,
   type UpdateProfile,
+  type AuditEntry, type InsertAuditEntry,
 } from "@shared/schema";
 import { randomBytes } from "node:crypto";
 import { hashPassword, isHashed } from "./password";
@@ -25,6 +26,11 @@ export interface IStorage {
   // `mustChangePassword` acompanha a senha: some quando o dono escolhe a sua,
   // liga quando um admin define uma provisória.
   updateUserPassword(id: number, password: string, mustChangePassword?: boolean): Promise<User | undefined>;
+  // Contador de senhas erradas e bloqueio permanente da conta
+  updateUserLockState(id: number, state: { failedLoginCount: number; lockedAt: string | null }): Promise<User | undefined>;
+  // Auditoria (append-only)
+  createAuditEntry(entry: InsertAuditEntry): Promise<AuditEntry>;
+  getRecentAuditEntries(limit: number): Promise<AuditEntry[]>;
   // Requests
   getRequest(id: number): Promise<Request | undefined>;
   getAllRequests(): Promise<Request[]>;
@@ -56,8 +62,13 @@ export interface IStorage {
 // Profile fields start empty — the member fills them in on /usuarios
 const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: null };
 
+// Conta nova nasce liberada e sem histórico de erro
+const unlocked = { failedLoginCount: 0, lockedAt: null };
+
 export class MemStorage implements IStorage {
   private users: Map<number, User> = new Map();
+  private auditLog: AuditEntry[] = [];
+  private nextAuditId = 1;
   private requests: Map<number, Request> = new Map();
   private subtasks: Map<number, Subtask> = new Map();
   private comments: Map<number, Comment> = new Map();
@@ -110,6 +121,7 @@ export class MemStorage implements IStorage {
     const id = this.nextUserId++;
     const user: User = {
       ...emptyProfile,
+      ...unlocked,
       id,
       ...data,
       password: isHashed(data.password) ? data.password : hashPassword(data.password),
@@ -125,6 +137,7 @@ export class MemStorage implements IStorage {
     const id = this.nextUserId++;
     const user: User = {
       ...emptyProfile,
+      ...unlocked,
       id,
       ...data,
       // O seed usa senhas em texto puro — guarda sempre o hash
@@ -183,6 +196,28 @@ export class MemStorage implements IStorage {
     user.mustChangePassword = mustChangePassword;
     this.users.set(id, user);
     return user;
+  }
+
+  async updateUserLockState(
+    id: number,
+    state: { failedLoginCount: number; lockedAt: string | null },
+  ): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    const updated: User = { ...user, ...state };
+    this.users.set(id, updated);
+    return updated;
+  }
+
+  // Auditoria
+  async createAuditEntry(entry: InsertAuditEntry): Promise<AuditEntry> {
+    const record: AuditEntry = { id: this.nextAuditId++, at: new Date().toISOString(), ...entry };
+    this.auditLog.push(record);
+    return record;
+  }
+
+  async getRecentAuditEntries(limit: number): Promise<AuditEntry[]> {
+    return [...this.auditLog].reverse().slice(0, limit);
   }
 
   // Requests
