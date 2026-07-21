@@ -25,7 +25,7 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
-# Política customizada: CRUD nas 4 tabelas DynamoDB
+# Política customizada: CRUD nas tabelas DynamoDB (audit é append-only, abaixo)
 resource "aws_iam_role_policy" "lambda_dynamodb" {
   name = "${var.app_name}-lambda-dynamodb-policy"
   role = aws_iam_role.lambda_exec.id

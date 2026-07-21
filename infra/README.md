@@ -33,12 +33,13 @@ Usuário → CloudFront → /api/* → API Gateway HTTP → Lambda (Express)
 ## Estrutura dos arquivos
 
 ```
-terraform/
+infra/
 ├── main.tf           # Provider AWS + backend config
 ├── variables.tf      # Variáveis configuráveis
 ├── s3.tf             # Bucket S3 para frontend estático
 ├── cloudfront.tf     # Distribuição CloudFront (CDN + proxy API)
-├── dynamodb.tf       # 4 tabelas DynamoDB (users, requests, subtasks, comments)
+├── dynamodb.tf       # 7 tabelas DynamoDB (users, requests, subtasks, comments,
+│                     #   schedules, unavailability, audit)
 ├── lambda.tf         # Lambda function + IAM role + CloudWatch
 ├── api_gateway.tf    # HTTP API Gateway + integração Lambda
 └── outputs.tf        # URLs e nomes dos recursos criados
@@ -46,71 +47,54 @@ terraform/
 
 ## Como usar
 
-### 1. Build do Lambda
+### 1. Build
 
-O backend Express precisa ser empacotado como uma função Lambda.
-Instale o adaptador:
-
-```bash
-npm install @vendia/serverless-express
-```
-
-Crie o entrypoint `server/lambda.ts`:
-
-```typescript
-import serverlessExpress from "@vendia/serverless-express";
-import { createApp } from "./app"; // sua função que cria o Express app
-
-let handler: any;
-
-export const handler = async (event: any, context: any) => {
-  if (!handler) {
-    const { app } = await createApp();
-    handler = serverlessExpress({ app });
-  }
-  return handler(event, context);
-};
-```
-
-Adicione o script de build para Lambda em `package.json`:
+Um único comando, na raiz do projeto, gera tudo que o deploy consome:
 
 ```bash
-# Build do backend para Lambda
-esbuild server/lambda.ts \
-  --bundle \
-  --platform=node \
-  --target=node20 \
-  --outfile=dist/lambda.js \
-  --format=cjs \
-  --external:@aws-sdk/*
-
-# Gera o ZIP para o Terraform
-cd dist && zip -r lambda.zip lambda.js && cd ..
+npm run build
 ```
 
-### 2. Build do Frontend
+O [`script/build.ts`](../script/build.ts) produz:
+
+| Artefato           | Consumido por                                  |
+| ------------------ | ---------------------------------------------- |
+| `dist/public/`     | Upload para o S3 (passo 3)                     |
+| `dist/lambda.js`   | Bundle do backend (entrypoint `server/lambda.ts`) |
+| `dist/lambda.zip`  | `aws_lambda_function.backend` no Terraform     |
+
+Dentro do ZIP o bundle fica em `dist/lambda.js`, casando com o handler
+`dist/lambda.handler` configurado em `lambda.tf`. O ZIP usa timestamp fixo, então
+builds sem mudança de código geram hash idêntico e não redeployam a Lambda à toa.
+
+> `dist/index.cjs` também é gerado — é o build do servidor para execução
+> tradicional (`npm start`), não usado no deploy serverless.
+
+### 2. Deploy da infraestrutura
+
+O segredo de assinatura dos tokens nunca é versionado: passe por variável de
+ambiente (mínimo 32 caracteres). Para gerar um novo, use `openssl rand -hex 32`.
 
 ```bash
-# Gera os arquivos estáticos do React na pasta dist/public
-vite build --outDir dist/public
-```
+export TF_VAR_jwt_secret="<segredo>"   # PowerShell: $env:TF_VAR_jwt_secret = "<segredo>"
 
-### 3. Deploy da infraestrutura
-
-```bash
-cd terraform/
+cd infra/
 
 # Inicializa os providers
 terraform init
 
 # Revisa o plano
-terraform plan -var="lambda_zip_path=../dist/lambda.zip"
+terraform plan
 
 # Aplica
-terraform apply -var="lambda_zip_path=../dist/lambda.zip"
+terraform apply
 ```
 
-### 4. Upload do frontend para S3
+`lambda_zip_path` já tem `../dist/lambda.zip` como default — só passe `-var` se o
+artefato estiver em outro lugar. Se o plan falhar com `filebase64sha256 ... cannot
+find the file`, o build do passo 1 não rodou.
+
+### 3. Upload do frontend para S3
 
 ```bash
 # Obtém o nome do bucket do output do Terraform
@@ -126,19 +110,28 @@ aws cloudfront create-invalidation \
   --paths "/*"
 ```
 
-## Migração do Storage (MemStorage → DynamoDB)
+## Storage
 
-O código atual usa `MemStorage` (em memória). Para usar DynamoDB, crie
-`server/storage-dynamo.ts` implementando a interface `IStorage` com o
-`@aws-sdk/client-dynamodb` ou `@aws-sdk/lib-dynamodb`. As variáveis de
-ambiente `TABLE_USERS`, `TABLE_REQUESTS`, `TABLE_SUBTASKS` e `TABLE_COMMENTS`
-são injetadas automaticamente pela Lambda.
+A implementação é escolhida em tempo de execução (`server/storage.ts`):
+
+- **Produção** (`NODE_ENV=production`, na Lambda): `DynamoStorage`
+  (`server/storage-dynamo.ts`), usando a IAM Role da função — sem credenciais
+  em variável de ambiente.
+- **Dev local**: `MemStorage`, em memória. Ele aborta se alguém tentar
+  instanciá-lo com `NODE_ENV=production`.
+
+Os nomes das 7 tabelas chegam pelas variáveis `TABLE_USERS`, `TABLE_REQUESTS`,
+`TABLE_SUBTASKS`, `TABLE_COMMENTS`, `TABLE_SCHEDULES`, `TABLE_UNAVAILABILITY` e
+`TABLE_AUDIT`, injetadas pelo `lambda.tf`. Ao adicionar uma tabela nova, atualize
+os três pontos: `dynamodb.tf`, o bloco `environment` e a policy IAM em
+`lambda.tf`.
 
 ## Variáveis importantes
 
 | Variável               | Padrão          | Descrição                              |
 |------------------------|-----------------|----------------------------------------|
 | `aws_region`           | `us-east-1`     | Região AWS                             |
+| `jwt_secret`           | — (obrigatória) | Segredo dos tokens; via `TF_VAR_jwt_secret` |
 | `environment`          | `production`    | Nome do ambiente                       |
 | `lambda_zip_path`      | `../dist/lambda.zip` | Caminho para o ZIP do backend     |
 | `lambda_memory_size`   | `256`           | Memória da Lambda (MB)                 |

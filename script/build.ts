@@ -1,6 +1,7 @@
 import { build as esbuild } from "esbuild";
 import { build as viteBuild } from "vite";
 import { rm, readFile } from "fs/promises";
+import AdmZip from "adm-zip";
 
 // server deps to bundle to reduce openat(2) syscalls
 // which helps cold start times
@@ -87,6 +88,21 @@ async function buildAll() {
     ],
     logLevel: "info",
   });
+
+  console.log("packaging lambda zip...");
+
+  // O handler da Lambda é "dist/lambda.handler" (infra/lambda.tf), então o
+  // arquivo precisa ficar sob dist/ dentro do ZIP — não na raiz.
+  const zip = new AdmZip();
+  zip.addLocalFile("dist/lambda.js", "dist");
+
+  // Timestamp fixo: sem isso o mtime entra no ZIP e o source_code_hash muda a
+  // cada build, redeployando a Lambda mesmo com o bundle byte-a-byte idêntico.
+  for (const entry of zip.getEntries()) {
+    entry.header.time = new Date(Date.UTC(1980, 0, 1));
+  }
+
+  zip.writeZip("dist/lambda.zip");
 }
 
 buildAll().catch((err) => {
