@@ -42,21 +42,37 @@ export function todayISO(): string {
 export interface ScheduleDate {
   date: string;
   roles: ScheduleRole[];
+  time: string;
 }
 
 // Roles selected per weekday (0=domingo ... 6=sábado). A weekday absent or
 // with an empty list is not generated.
 export type RolesByWeekday = Record<number, ScheduleRole[]>;
 
+// Event time chosen per weekday (0=domingo ... 6=sábado)
+export type TimeByWeekday = Record<number, string>;
+
+export const DEFAULT_SCHEDULE_TIME = "18:00";
+
 // All dates matching the selected weekdays within `weeks` weeks starting from
-// `start`, each carrying the roles chosen for that weekday
-export function datesForWeekdays(start: Date, weeks: number, rolesByWeekday: RolesByWeekday): ScheduleDate[] {
+// `start`, each carrying the roles and time chosen for that weekday
+export function datesForWeekdays(
+  start: Date,
+  weeks: number,
+  rolesByWeekday: RolesByWeekday,
+  timeByWeekday: TimeByWeekday,
+): ScheduleDate[] {
   const dates: ScheduleDate[] = [];
   for (let i = 0; i < weeks * 7; i++) {
     const d = addDays(start, i);
-    const roles = rolesByWeekday[d.getDay()];
+    const weekday = d.getDay();
+    const roles = rolesByWeekday[weekday];
     if (roles && roles.length > 0) {
-      dates.push({ date: format(d, "yyyy-MM-dd"), roles });
+      dates.push({
+        date: format(d, "yyyy-MM-dd"),
+        roles,
+        time: timeByWeekday[weekday] || DEFAULT_SCHEDULE_TIME,
+      });
     }
   }
   return dates;
@@ -77,10 +93,9 @@ export function autoGenerateSchedules(opts: {
   existing: Schedule[];
   unavailability: Unavailability[];
   dates: ScheduleDate[];
-  time: string;
   title: string;
 }): AutoGenerateResult {
-  const { volunteers, existing, unavailability, dates, time, title } = opts;
+  const { volunteers, existing, unavailability, dates, title } = opts;
 
   const load = new Map<number, number>();
   const eligibleVolunteers = volunteers.filter((v) => v.roles.length > 0);
@@ -98,7 +113,7 @@ export function autoGenerateSchedules(opts: {
   const generated: InsertSchedule[] = [];
   const skippedDates: string[] = [];
 
-  for (const { date, roles } of dates) {
+  for (const { date, roles, time } of dates) {
     if (scheduledDates.has(date)) {
       skippedDates.push(date);
       continue;
