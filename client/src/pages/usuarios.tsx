@@ -152,7 +152,6 @@ function ProfileForm() {
 }
 
 function PasswordForm() {
-  const { setToken } = useAuth();
   const { toast } = useToast();
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -166,9 +165,8 @@ function PasswordForm() {
       });
       return res.json();
     },
-    onSuccess: ({ token }) => {
-      // A troca invalidou o token antigo — assume o novo para seguir logado
-      if (token) setToken(token);
+    onSuccess: () => {
+      // A troca invalidou a sessão antiga — o servidor já reemitiu o cookie
       toast({
         title: "Senha alterada",
         description: "As sessões abertas em outros dispositivos foram encerradas.",

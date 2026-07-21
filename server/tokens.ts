@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import { createHash, randomBytes } from "crypto";
+import type { Response } from "express";
 import type { User } from "@shared/schema";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -8,7 +9,13 @@ import type { User } from "@shared/schema";
 // ─────────────────────────────────────────────────────────────────────────────
 
 const TOKEN_TTL = "12h";
+const TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
 const ISSUER = "bdn-comunicacao";
+
+// O token vive num cookie HttpOnly: JavaScript da página não consegue lê-lo,
+// então um XSS (dependência comprometida, script de terceiro) não leva a sessão
+// embora. Antes ele ficava no localStorage, onde qualquer script alcançava.
+export const SESSION_COOKIE = "bdn_session";
 
 function resolveSecret(): string {
   const fromEnv = process.env.JWT_SECRET;
@@ -66,4 +73,24 @@ export function verifyToken(token: string): TokenPayload | undefined {
 // O token só vale enquanto a senha for a mesma de quando ele foi emitido
 export function matchesCurrentPassword(payload: TokenPayload, user: User): boolean {
   return payload.pv === passwordFingerprint(user.password);
+}
+
+// sameSite "strict" é o que segura CSRF agora que o navegador manda o cookie
+// sozinho: requisição vinda de outro site não carrega o cookie. Em dev o app
+// roda em http://localhost, onde "secure" impediria o cookie de ser gravado.
+function cookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "strict" as const,
+    path: "/",
+  };
+}
+
+export function setSessionCookie(res: Response, user: User): void {
+  res.cookie(SESSION_COOKIE, signToken(user), { ...cookieOptions(), maxAge: TOKEN_TTL_MS });
+}
+
+export function clearSessionCookie(res: Response): void {
+  res.clearCookie(SESSION_COOKIE, cookieOptions());
 }

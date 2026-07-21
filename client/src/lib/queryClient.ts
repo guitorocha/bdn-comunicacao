@@ -1,14 +1,13 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
-import { clearSession, getAuthToken } from "./auth";
+import { clearSession } from "./auth";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
-function authHeaders(): Record<string, string> {
-  const token = getAuthToken();
-  return token ? { Authorization: `Bearer ${token}` } : {};
-}
+// A sessão vai no cookie HttpOnly "bdn_session", que o navegador anexa sozinho
+// quando o fetch pede credenciais. O app não tem mais o token em mãos.
+const CREDENTIALS: RequestCredentials = "include";
 
-// Token expirado/inválido: encerra a sessão local para o app voltar ao login
+// Sessão expirada/inválida: encerra a sessão local para o app voltar ao login
 function handleUnauthorized(res: Response) {
   if (res.status === 401) clearSession();
 }
@@ -34,10 +33,8 @@ export async function apiRequest(
 ): Promise<Response> {
   const res = await fetch(`${API_BASE}${url}`, {
     method,
-    headers: {
-      ...(data ? { "Content-Type": "application/json" } : {}),
-      ...authHeaders(),
-    },
+    headers: data ? { "Content-Type": "application/json" } : {},
+    credentials: CREDENTIALS,
     body: data ? JSON.stringify(data) : undefined,
   });
 
@@ -53,7 +50,7 @@ export const getQueryFn: <T>(options: {
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
     const res = await fetch(`${API_BASE}${queryKey.join("/")}`, {
-      headers: authHeaders(),
+      credentials: CREDENTIALS,
     });
 
     handleUnauthorized(res);

@@ -12,7 +12,12 @@ resource "aws_apigatewayv2_api" "backend" {
     allow_origins = var.cors_allowed_origins
     allow_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]
     allow_headers = ["Content-Type", "Authorization", "X-Requested-With"]
-    max_age       = 300
+    # A sessão é um cookie: sem allow_credentials o navegador não o envia numa
+    # chamada cross-origin. Fica desligado enquanto a lista de origens estiver
+    # vazia (o caminho normal é same-origin pelo CloudFront), porque
+    # allow_credentials sem origem explícita não tem uso — e é inválido com "*".
+    allow_credentials = length(var.cors_allowed_origins) > 0
+    max_age           = 300
   }
 }
 

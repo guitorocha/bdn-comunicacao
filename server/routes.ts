@@ -5,7 +5,13 @@ import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCre
 import { z } from "zod";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { hashPassword, isHashed, verifyPassword } from "./password";
-import { matchesCurrentPassword, signToken, verifyToken } from "./tokens";
+import {
+  SESSION_COOKIE,
+  clearSessionCookie,
+  matchesCurrentPassword,
+  setSessionCookie,
+  verifyToken,
+} from "./tokens";
 
 // ── Rate limiting ──
 // Sem isso o login aceita tentativas ilimitadas, e cada uma roda um scrypt
@@ -49,20 +55,34 @@ const apiLimiter = rateLimit({
 });
 
 // ── Auth middleware ──
-// O cliente envia o JWT emitido no login em "Authorization: Bearer <token>".
-// O token é assinado pelo servidor, então não pode ser forjado; ainda assim o
-// usuário é recarregado do banco a cada request para que troca de senha,
-// remoção de admin ou exclusão de conta valham imediatamente.
+// O JWT emitido no login viaja num cookie HttpOnly, fora do alcance de qualquer
+// script da página. O token é assinado pelo servidor, então não pode ser
+// forjado; ainda assim o usuário é recarregado do banco a cada request para que
+// troca de senha, remoção de admin ou exclusão de conta valham imediatamente.
 
 interface AuthedRequest extends ExpressRequest {
   authUser?: User;
 }
 
-async function resolveRequestUser(req: ExpressRequest): Promise<User | undefined> {
-  const header = req.header("authorization");
-  if (!header?.startsWith("Bearer ")) return undefined;
+function readToken(req: ExpressRequest): string | undefined {
+  const fromCookie = (req as ExpressRequest & { cookies?: Record<string, string> }).cookies?.[
+    SESSION_COOKIE
+  ];
+  if (fromCookie) return fromCookie;
 
-  const payload = verifyToken(header.slice("Bearer ".length).trim());
+  // Fallback de migração: abas abertas com o cliente antigo ainda mandam o
+  // Bearer do localStorage. Pode sair depois que todo mundo tiver relogado.
+  const header = req.header("authorization");
+  if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length).trim();
+
+  return undefined;
+}
+
+async function resolveRequestUser(req: ExpressRequest): Promise<User | undefined> {
+  const token = readToken(req);
+  if (!token) return undefined;
+
+  const payload = verifyToken(token);
   if (!payload) return undefined;
 
   const id = parseInt(payload.sub, 10);
@@ -114,12 +134,17 @@ export async function registerRoutes(
       user = (await storage.updateUserPassword(found.id, hashPassword(password))) ?? found;
     }
     const { password: _pw, ...safeUser } = user;
-    return res.json({ token: signToken(user), user: safeUser });
+    // O token sai só no cookie HttpOnly — não vai no corpo, senão o cliente
+    // poderia guardá-lo de novo em localStorage e desfazer a proteção.
+    setSessionCookie(res, user);
+    return res.json({ user: safeUser });
   });
 
-  // Sem estado no servidor: o logout apenas descarta o token no cliente.
-  // Endpoint existe para o cliente ter um ponto único de saída.
-  app.post("/api/auth/logout", (_req, res) => res.json({ success: true }));
+  // Sem estado no servidor: sair é apagar o cookie de sessão.
+  app.post("/api/auth/logout", (_req, res) => {
+    clearSessionCookie(res);
+    return res.json({ success: true });
+  });
 
   // Revalida o token e devolve o usuário atualizado (usado no boot do cliente)
   app.get("/api/auth/me", requireUser, async (req, res) => {
@@ -179,8 +204,9 @@ export async function registerRoutes(
     const updated = await storage.updateUserPassword(user.id, hashPassword(parsed.data.newPassword));
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
     // A troca derruba os tokens antigos (inclusive em outros dispositivos);
-    // devolve um novo para quem acabou de trocar continuar na sessão.
-    return res.json({ success: true, token: signToken(updated) });
+    // reemite o cookie para quem acabou de trocar continuar na sessão.
+    setSessionCookie(res, updated);
+    return res.json({ success: true });
   });
 
   app.post("/api/users", requireAdmin, async (req, res) => {

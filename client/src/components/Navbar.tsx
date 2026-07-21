@@ -1,5 +1,6 @@
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/lib/auth";
+import { apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -34,7 +35,14 @@ export function Navbar({ subtitle }: { subtitle?: string }) {
   const [location, navigate] = useLocation();
   const { user, isAuthenticated, logout } = useAuth();
 
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    // Quem apaga o cookie de sessão é o servidor — o cliente não o enxerga.
+    // Se a chamada falhar (offline), ainda assim sai da sessão local.
+    try {
+      await apiRequest("POST", "/api/auth/logout");
+    } catch {
+      // ignora: o cookie expira sozinho em 12h
+    }
     logout();
     navigate("/");
   };

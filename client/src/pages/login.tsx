@@ -29,8 +29,9 @@ export default function Login() {
       const res = await apiRequest("POST", "/api/auth/login", data);
       return await res.json();
     },
-    onSuccess: ({ token, user }) => {
-      login(user, token);
+    onSuccess: ({ user }) => {
+      // O token não vem no corpo: ficou no cookie HttpOnly gravado pelo servidor
+      login(user);
       // Volta para a página que pediu o login (?next=...), senão vai às escalas.
       // O wouter (useHashLocation) guarda a query real em window.location.search,
       // não no hash — por isso lemos de search aqui.

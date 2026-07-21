@@ -4,6 +4,7 @@ Pending security work, ordered by priority. Each item says **what's wrong**, **w
 
 Written 2026-07-20, after the session that added password hashing and JWT sessions.
 Updated 2026-07-20 (same day): items 2, 4, 6, 7, 8, 9.4, 10 and 11 are now implemented — see below.
+Updated 2026-07-21: item 5 is implemented — the session moved to an `HttpOnly` cookie.
 
 ## Already done (context, no action needed)
 
@@ -22,6 +23,7 @@ Updated 2026-07-20 (same day): items 2, 4, 6, 7, 8, 9.4, 10 and 11 are now imple
 - **Response bodies no longer logged** (item 9.4) — the old logger wrote the login response, token included, to CloudWatch.
 - **CORS no longer wildcard** (item 10) — defaults to `[]`, since the app is same-origin through CloudFront.
 - **Security headers** (item 11) — `helmet` on both entry points, CSP still off pending tuning.
+- **Session in an `HttpOnly` cookie** (item 5) — the token is out of `localStorage` and out of JavaScript's reach.
 
 ---
 
@@ -175,7 +177,17 @@ Consider a second limiter keyed on `username` so one account can't be attacked f
 
 ## 5. The session token lives in `localStorage`, readable by any XSS
 
-**Status: not done** — deliberately deferred as a larger refactor.
+**Status: done.** The JWT now travels in an `HttpOnly` cookie (`bdn_session`, `SameSite=Strict`, `Path=/`, 12h `Max-Age`, `Secure` only in production — dev runs on `http://localhost`, where `Secure` would stop the cookie being stored). It is no longer returned in the login body at all, so the client physically cannot store it again. `cookie-parser` is registered in [`server/index.ts`](../server/index.ts) **and** [`server/lambda.ts`](../server/lambda.ts) (the Lambda builds its own app), and added to the esbuild allowlist in [`script/build.ts`](../script/build.ts) — verified it lands inside `dist/lambda.js` rather than as an external `require`.
+
+On the client, [`client/src/lib/auth.ts`](../client/src/lib/auth.ts) keeps only the user object (display data — name, roles, admin flag; it grants nothing, the cookie is what the server checks) under a new key `bdn-auth-user-v2`, and deletes the old `bdn-auth-session`/`bdn-auth-user` keys on first load so no stale token sits in `localStorage`. Every fetch in [`client/src/lib/queryClient.ts`](../client/src/lib/queryClient.ts) sends `credentials: "include"`. Logout now calls `POST /api/auth/logout` (which `clearCookie`s) before dropping local state — previously it was purely client-side, which is no longer enough.
+
+`resolveRequestUser` reads the cookie first and **still accepts `Authorization: Bearer` as a fallback**, so a tab left open on the old client keeps working. Remove that fallback once everyone has logged in again — it's the last path by which a script-readable token would be accepted.
+
+Verified end to end against the dev server: login returns `Set-Cookie: bdn_session=…; HttpOnly; SameSite=Strict` and a body with no `token`; `/api/auth/me` is 200 with the cookie and 401 without; logout expires the cookie and the next call is 401; a password change re-issues the cookie and 401s the previous one.
+
+**Infra:** no CloudFront change was needed — the `/api/*` behavior already forwards `cookies { forward = "all" }` and caches nothing. [`infra/api_gateway.tf`](../infra/api_gateway.tf) now sets `allow_credentials = length(var.cors_allowed_origins) > 0`, so cookies would survive if anyone ever points a cross-origin client at API Gateway; with the default empty list the app stays same-origin and CORS is not involved.
+
+**Still open:** no CSRF token. `SameSite=Strict` is what carries the defense today — a cross-site request simply doesn't get the cookie. A double-submit token would be belt and braces, and matters more if the cookie ever relaxes to `Lax`/`None`. The CSP in item 11 is the other half of this: it's what limits the XSS in the first place.
 
 **Severity: medium (design tradeoff, not a bug).**
 

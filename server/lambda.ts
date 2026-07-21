@@ -1,5 +1,6 @@
 import serverlessExpress from "@vendia/serverless-express";
 import express, { type Request, Response, NextFunction } from "express";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { createServer } from "http";
@@ -28,6 +29,9 @@ export const handler = async (event: any, context: any) => {
 
     app.use(express.json());
     app.use(express.urlencoded({ extended: false }));
+    // Lambda monta o próprio app: o cookie-parser precisa ser registrado aqui
+    // também, senão a sessão via cookie só funcionaria no servidor de dev.
+    app.use(cookieParser());
 
     await registerRoutes(httpServer, app);
 

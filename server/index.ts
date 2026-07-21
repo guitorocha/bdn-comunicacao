@@ -1,4 +1,5 @@
 import express, { type Request, Response, NextFunction } from "express";
+import cookieParser from "cookie-parser";
 import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
@@ -31,6 +32,9 @@ app.use(
 );
 
 app.use(express.urlencoded({ extended: false }));
+
+// A sessão chega no cookie HttpOnly "bdn_session" — sem isso req.cookies não existe
+app.use(cookieParser());
 
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
