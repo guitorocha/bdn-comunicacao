@@ -3,8 +3,50 @@ import { createServer, type Server } from "http";
 import { storage } from "./storage";
 import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, SCHEDULE_ROLES, type User } from "@shared/schema";
 import { z } from "zod";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { hashPassword, isHashed, verifyPassword } from "./password";
 import { matchesCurrentPassword, signToken, verifyToken } from "./tokens";
+
+// ── Rate limiting ──
+// Sem isso o login aceita tentativas ilimitadas, e cada uma roda um scrypt
+// (~70ms de Lambda), o que também é um vetor de custo. Dois limites: por IP
+// (ataque de um lugar só) e por usuário (ataque distribuído numa conta).
+const tooManyLogins = { message: "Muitas tentativas de login. Tente novamente em alguns minutos." };
+
+// Só tentativas que falham contam: a equipe toda costuma sair do mesmo wi-fi
+// (um IP só depois do NAT), e login certo de um não pode gastar a cota do outro.
+// Para quem está adivinhando senha nada muda — todo palpite errado queima cota.
+const loginIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 30,
+  skipSuccessfulRequests: true,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: tooManyLogins,
+});
+
+// Limite por conta: barra o ataque distribuído, que passa pelo limite de IP
+const loginUserLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: tooManyLogins,
+  keyGenerator: (req) =>
+    typeof req.body?.username === "string"
+      ? `user:${req.body.username.toLowerCase()}`
+      : ipKeyGenerator(req.ip ?? ""),
+});
+
+// Teto geral da API, bem acima do uso normal — segura scripts abusivos
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 600,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: { message: "Muitas requisições. Aguarde alguns minutos." },
+});
 
 // ── Auth middleware ──
 // O cliente envia o JWT emitido no login em "Authorization: Bearer <token>".
@@ -53,8 +95,10 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
+  app.use("/api", apiLimiter);
+
   // ── Auth ──
-  app.post("/api/auth/login", async (req, res) => {
+  app.post("/api/auth/login", loginIpLimiter, loginUserLimiter, async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
       return res.status(400).json({ message: "Usuário e senha são obrigatórios" });
@@ -85,11 +129,23 @@ export async function registerRoutes(
 
   // ── Users (admin only) ──
 
-  app.get("/api/users", requireUser, async (_req, res) => {
+  // Admin vê o cadastro completo (/equipes); os demais recebem só o que as
+  // escalas precisam — telefone e e-mail do time não são lista de contatos.
+  app.get("/api/users", requireUser, async (req, res) => {
+    const viewer = (req as AuthedRequest).authUser!;
     const users = await storage.getAllUsers();
-    // Don't send passwords to the client
-    const safeUsers = users.map(({ password, ...rest }) => rest);
-    return res.json(safeUsers);
+    if (viewer.isAdmin) {
+      return res.json(users.map(({ password, ...rest }) => rest));
+    }
+    return res.json(
+      users.map((u) => ({
+        id: u.id,
+        username: u.username,
+        displayName: u.displayName,
+        isAdmin: u.isAdmin,
+        roles: u.roles,
+      })),
+    );
   });
 
   // ── Perfil do próprio usuário (qualquer usuário autenticado) ──
@@ -205,8 +261,8 @@ export async function registerRoutes(
     }
   });
 
-  // Get all requests (for admin panel)
-  app.get("/api/requests", async (_req, res) => {
+  // Get all requests (painel interno — só para quem está logado)
+  app.get("/api/requests", requireUser, async (_req, res) => {
     const all = await storage.getAllRequests();
     return res.json(all);
   });
@@ -220,8 +276,8 @@ export async function registerRoutes(
     return res.json(request);
   });
 
-  // Update request status (admin only)
-  app.patch("/api/requests/:id/status", async (req, res) => {
+  // Update request status — qualquer membro logado toca a solicitação adiante
+  app.patch("/api/requests/:id/status", requireUser, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const { status } = req.body;
     const valid = ["pendente", "em_andamento", "concluida", "cancelada"];
@@ -235,13 +291,15 @@ export async function registerRoutes(
 
   // ── Subtasks ──
 
+  // Leitura fica pública: a página de acompanhamento mostra o andamento a quem
+  // tem o número da solicitação. Escrita exige login.
   app.get("/api/requests/:id/subtasks", async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const subtasks = await storage.getSubtasksByRequest(id);
     return res.json(subtasks);
   });
 
-  app.post("/api/requests/:id/subtasks", async (req, res) => {
+  app.post("/api/requests/:id/subtasks", requireUser, async (req, res) => {
     const requestId = parseInt(req.params.id, 10);
     try {
       const data = insertSubtaskSchema.parse({ ...req.body, requestId });
@@ -255,14 +313,14 @@ export async function registerRoutes(
     }
   });
 
-  app.patch("/api/subtasks/:id/toggle", async (req, res) => {
+  app.patch("/api/subtasks/:id/toggle", requireUser, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const toggled = await storage.toggleSubtask(id);
     if (!toggled) return res.status(404).json({ message: "Subtarefa não encontrada" });
     return res.json(toggled);
   });
 
-  app.delete("/api/subtasks/:id", async (req, res) => {
+  app.delete("/api/subtasks/:id", requireUser, async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const deleted = await storage.deleteSubtask(id);
     if (!deleted) return res.status(404).json({ message: "Subtarefa não encontrada" });
@@ -271,16 +329,23 @@ export async function registerRoutes(
 
   // ── Comments ──
 
+  // Igual às subtarefas: leitura pública (acompanhamento), escrita autenticada.
   app.get("/api/requests/:id/comments", async (req, res) => {
     const id = parseInt(req.params.id, 10);
     const comments = await storage.getCommentsByRequest(id);
     return res.json(comments);
   });
 
-  app.post("/api/requests/:id/comments", async (req, res) => {
+  app.post("/api/requests/:id/comments", requireUser, async (req, res) => {
     const requestId = parseInt(req.params.id, 10);
+    const author = (req as AuthedRequest).authUser!;
     try {
-      const data = insertCommentSchema.parse({ ...req.body, requestId });
+      // authorName vem da sessão, nunca do corpo — ninguém comenta como outra pessoa
+      const data = insertCommentSchema.parse({
+        ...req.body,
+        requestId,
+        authorName: author.displayName,
+      });
       const comment = await storage.createComment(data);
       return res.status(201).json(comment);
     } catch (err) {

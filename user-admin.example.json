@@ -1,0 +1,8 @@
+{
+  "_comment": "Modelo do payload de `aws dynamodb put-item` usado para semear o admin. Copie para user-admin.json (ignorado pelo git), troque CHANGE_ME por uma senha longa e única, e NUNCA versione o arquivo real. Prefira criar usuários pelo próprio app — a senha em texto puro gravada aqui só vira hash no primeiro login.",
+  "id":          {"N": "1"},
+  "username":    {"S": "admin"},
+  "password":    {"S": "CHANGE_ME"},
+  "displayName": {"S": "Administrador"},
+  "isAdmin":     {"BOOL": true}
+}

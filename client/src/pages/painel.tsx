@@ -82,7 +82,7 @@ export default function Painel() {
           {/* Detail Panel */}
           <div className="lg:col-span-2">
             {selectedId ? (
-              <RequestDetail requestId={selectedId} userName={user?.displayName || "Equipe"} />
+              <RequestDetail requestId={selectedId} />
             ) : (
               <Card className="p-12 text-center text-muted-foreground">
                 <MessageSquare className="w-10 h-10 mx-auto mb-3 text-muted-foreground/30" />
@@ -151,7 +151,7 @@ function RequestList({ statusFilter, selectedId, onSelect }: {
   );
 }
 
-function RequestDetail({ requestId, userName }: { requestId: number; userName: string }) {
+function RequestDetail({ requestId }: { requestId: number }) {
   const [newSubtask, setNewSubtask] = useState("");
   const [newComment, setNewComment] = useState("");
 
@@ -222,9 +222,9 @@ function RequestDetail({ requestId, userName }: { requestId: number; userName: s
 
   const addCommentMutation = useMutation({
     mutationFn: async (content: string) => {
+      // authorName é preenchido pelo servidor a partir da sessão
       const res = await apiRequest("POST", `/api/requests/${requestId}/comments`, {
         content,
-        authorName: userName,
         requestId,
       });
       return res.json();

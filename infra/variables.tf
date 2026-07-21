@@ -46,9 +46,14 @@ variable "jwt_secret" {
 }
 
 variable "cors_allowed_origins" {
-  description = "Origens permitidas para o CORS no API Gateway"
+  description = "Origens permitidas para o CORS no API Gateway. Vazio por padrão: o app chama /api pelo próprio domínio do CloudFront, então é same-origin e não precisa de CORS. Só preencha (com o domínio do CloudFront e/ou o domínio próprio) se algum cliente for bater direto no API Gateway. Nunca use [\"*\"] — isso libera a API para qualquer site."
   type        = list(string)
-  default     = ["*"]
+  default     = []
+
+  validation {
+    condition     = !contains(var.cors_allowed_origins, "*")
+    error_message = "cors_allowed_origins não pode conter \"*\". Liste as origens do app explicitamente."
+  }
 }
 
 variable "cloudfront_price_class" {

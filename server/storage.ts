@@ -8,6 +8,7 @@ import {
   type ScheduleRole,
   type UpdateProfile,
 } from "@shared/schema";
+import { randomBytes } from "node:crypto";
 import { hashPassword, isHashed } from "./password";
 
 export interface IStorage {
@@ -69,48 +70,29 @@ export class MemStorage implements IStorage {
 
   constructor() {
     // Seed users (dev only). Users with roles are the schedulable volunteers.
-    this.createUserAdmin({
-      username: "admin",
-      password: "bdn2026",
-      displayName: "Administrador",
-      isAdmin: true,
-      roles: [],
-    });
-    this.createUserAdmin({
-      username: "comunicacao",
-      password: "comunica2026",
-      displayName: "Equipe Comunicação",
-      isAdmin: false,
-      roles: ["projecao"],
-    });
-    this.createUserAdmin({
-      username: "lucas",
-      password: "lucas2026",
-      displayName: "Lucas Almeida",
-      isAdmin: false,
-      roles: ["fotografia", "filmmaker"],
-    });
-    this.createUserAdmin({
-      username: "mariana",
-      password: "mariana2026",
-      displayName: "Mariana Souza",
-      isAdmin: false,
-      roles: ["fotografia"],
-    });
-    this.createUserAdmin({
-      username: "pedro",
-      password: "pedro2026",
-      displayName: "Pedro Santos",
-      isAdmin: false,
-      roles: ["projecao", "transmissao"],
-    });
-    this.createUserAdmin({
-      username: "gabriel",
-      password: "gabriel2026",
-      displayName: "Gabriel Costa",
-      isAdmin: false,
-      roles: ["transmissao", "filmmaker"],
-    });
+    // Nenhuma senha fica no código: usa DEV_SEED_PASSWORD ou sorteia uma e
+    // imprime no console. O seed nunca roda em produção.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("MemStorage não pode ser usado em produção");
+    }
+
+    const seedPassword = process.env.DEV_SEED_PASSWORD ?? randomBytes(12).toString("hex");
+    if (!process.env.DEV_SEED_PASSWORD) {
+      console.log(`[seed] senha dos usuários de desenvolvimento: ${seedPassword}`);
+    }
+
+    const seedUsers: Array<{ username: string; displayName: string; isAdmin: boolean; roles: ScheduleRole[] }> = [
+      { username: "admin", displayName: "Administrador", isAdmin: true, roles: [] },
+      { username: "comunicacao", displayName: "Equipe Comunicação", isAdmin: false, roles: ["projecao"] },
+      { username: "lucas", displayName: "Lucas Almeida", isAdmin: false, roles: ["fotografia", "filmmaker"] },
+      { username: "mariana", displayName: "Mariana Souza", isAdmin: false, roles: ["fotografia"] },
+      { username: "pedro", displayName: "Pedro Santos", isAdmin: false, roles: ["projecao", "transmissao"] },
+      { username: "gabriel", displayName: "Gabriel Costa", isAdmin: false, roles: ["transmissao", "filmmaker"] },
+    ];
+
+    for (const user of seedUsers) {
+      this.createUserAdmin({ ...user, password: seedPassword });
+    }
   }
 
   // Users

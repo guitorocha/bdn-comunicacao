@@ -1,5 +1,6 @@
 import serverlessExpress from "@vendia/serverless-express";
 import express, { type Request, Response, NextFunction } from "express";
+import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { createServer } from "http";
 
@@ -9,6 +10,11 @@ export const handler = async (event: any, context: any) => {
   if (!appHandler) {
     const app = express();
     const httpServer = createServer(app);
+
+    // API Gateway/CloudFront são proxies: sem isso req.ip é o proxy e o rate
+    // limit do login trataria todos os usuários como um só cliente.
+    app.set("trust proxy", 1);
+    app.use(helmet({ contentSecurityPolicy: false }));
 
     const stage = process.env.STAGE;
 

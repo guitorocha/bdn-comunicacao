@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { PASSWORD_MIN_LENGTH, passwordIssue } from "@shared/schema";
 import { KeyRound, Save, UserCog } from "lucide-react";
 import { Redirect } from "wouter";
 import { Navbar } from "@/components/Navbar";
@@ -182,8 +183,10 @@ function PasswordForm() {
   });
 
   const mismatch = confirmPassword.length > 0 && newPassword !== confirmPassword;
+  // Mesma regra do servidor, para o erro aparecer antes de enviar
+  const policyIssue = newPassword.length > 0 ? passwordIssue(newPassword) : null;
   const canSubmit =
-    currentPassword.length > 0 && newPassword.length >= 6 && !mismatch && confirmPassword.length > 0;
+    currentPassword.length > 0 && !policyIssue && newPassword.length > 0 && !mismatch && confirmPassword.length > 0;
 
   return (
     <Card className="p-6 space-y-4">
@@ -209,7 +212,7 @@ function PasswordForm() {
           <Input
             id="new-password"
             type="password"
-            placeholder="Mínimo 6 caracteres"
+            placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres`}
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             data-testid="input-new-password"
@@ -227,6 +230,10 @@ function PasswordForm() {
           />
         </div>
       </div>
+
+      {policyIssue && (
+        <p className="text-xs text-destructive">{policyIssue}</p>
+      )}
 
       {mismatch && (
         <p className="text-xs text-destructive">As senhas não conferem.</p>

@@ -36,10 +36,46 @@ export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 export type SafeUser = Omit<User, "password">;
 
+// ── Política de senha ──
+// Comprimento vale mais que regras de caractere: uma frase longa é melhor que
+// "S3nh@!". Além do mínimo, barra os valores óbvios que já circularam por aqui.
+export const PASSWORD_MIN_LENGTH = 10;
+
+const COMMON_PASSWORDS = [
+  "bdn2026", "bdn2025", "bdncomunicacao", "comunicacao", "batistadanovavida",
+  "123456", "1234567", "12345678", "123456789", "1234567890",
+  "senha", "senha123", "password", "qwerty", "abc123", "admin", "admin123",
+];
+
+export const PASSWORD_RULE_MESSAGE = `A senha deve ter ao menos ${PASSWORD_MIN_LENGTH} caracteres`;
+
+export function passwordIssue(password: string, username?: string): string | null {
+  if (password.length < PASSWORD_MIN_LENGTH) return PASSWORD_RULE_MESSAGE;
+  const normalized = password.toLowerCase();
+  if (COMMON_PASSWORDS.includes(normalized)) return "Essa senha é muito comum. Escolha outra.";
+  if (username && normalized === username.trim().toLowerCase()) {
+    return "A senha não pode ser igual ao nome de usuário";
+  }
+  return null;
+}
+
+// Aplica a política a um campo de senha; `username` vem do próprio objeto
+// quando existe (criação de usuário), para barrar senha igual ao login.
+export const passwordField = z.string().superRefine((value, ctx) => {
+  const issue = passwordIssue(value);
+  if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue });
+});
+
 // Schema for admin-created users (allows setting isAdmin)
 export const adminCreateUserSchema = createInsertSchema(users, {
   roles: z.array(z.enum(SCHEDULE_ROLES)).default([]),
-}).omit({ id: true });
+  password: passwordField,
+})
+  .omit({ id: true })
+  .superRefine((data, ctx) => {
+    const issue = passwordIssue(data.password, data.username);
+    if (issue) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["password"], message: issue });
+  });
 export type AdminCreateUser = z.infer<typeof adminCreateUserSchema>;
 
 // Profile the logged-in user edits themselves on /usuarios
@@ -56,7 +92,7 @@ export type UpdateProfile = z.infer<typeof updateProfileSchema>;
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().min(1, "Informe a senha atual"),
-  newPassword: z.string().min(6, "A nova senha deve ter ao menos 6 caracteres"),
+  newPassword: passwordField,
 });
 export type ChangePassword = z.infer<typeof changePasswordSchema>;
 

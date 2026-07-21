@@ -1,7 +1,0 @@
-{
-  "id":          {"N": "1"},
-  "username":    {"S": "admin"},
-  "password":    {"S": "bdn2026"},
-  "displayName": {"S": "Administrador"},
-  "isAdmin":     {"BOOL": true}
-}

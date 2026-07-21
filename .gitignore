@@ -18,6 +18,8 @@ vite.config.ts.*
 .sublime-project
 
 # Environment files
+# Seed do admin: contém senha em texto puro (use user-admin.example.json como modelo)
+user-admin.json
 .env
 .env.local
 .env.*.local

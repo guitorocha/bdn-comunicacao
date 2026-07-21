@@ -3,6 +3,7 @@
 Pending security work, ordered by priority. Each item says **what's wrong**, **where**, **how to fix it**, and **how to verify the fix**.
 
 Written 2026-07-20, after the session that added password hashing and JWT sessions.
+Updated 2026-07-20 (same day): items 2, 4, 6, 7, 8, 9.4, 10 and 11 are now implemented — see below.
 
 ## Already done (context, no action needed)
 
@@ -11,9 +12,22 @@ Written 2026-07-20, after the session that added password hashing and JWT sessio
 - **Stateless revocation** — each token embeds a fingerprint of the current password hash, so changing a password invalidates every token issued before it, on all devices. Deleting a user kills their tokens too.
 - **`JWT_SECRET` is mandatory in production** — the server refuses to boot without a secret of at least 32 chars. Wired through Terraform as the sensitive `jwt_secret` variable.
 
+### Landed in the follow-up session
+
+- **Request/subtask/comment routes require login** (item 2) — writes are all behind `requireUser`; only the public form, the tracking lookup and the two tracking `GET`s stay open. Comment authorship now comes from the session.
+- **Login rate limiting** (item 4) — per-IP and per-account limiters, counting only failed attempts. `trust proxy` set on both the dev server *and* the Lambda.
+- **Password policy** (item 6, partial) — 10-character floor plus a small blocklist, shared by the API and both UI forms. Reset flow and `mustChangePassword` still pending.
+- **`/api/users` trimmed for non-admins** (item 7).
+- **Dev seed passwords out of the source** (item 8) — `DEV_SEED_PASSWORD` or a random one printed at startup.
+- **Response bodies no longer logged** (item 9.4) — the old logger wrote the login response, token included, to CloudWatch.
+- **CORS no longer wildcard** (item 10) — defaults to `[]`, since the app is same-origin through CloudFront.
+- **Security headers** (item 11) — `helmet` on both entry points, CSP still off pending tuning.
+
 ---
 
 ## 1. Admin password `bdn2026` is committed to the repository
+
+**Status: repo side done — ⚠️ ACTION STILL REQUIRED FROM YOU.** `user-admin.json` is untracked and gitignored, and [`user-admin.example.json`](../user-admin.example.json) holds the recipe with a `CHANGE_ME` placeholder. **Rotating the production password is still on you and nothing else here substitutes for it** — the value is in the git history, so `bdn2026` must be assumed compromised until changed. Log in as `admin` → `/usuarios` → "Alterar senha" (the new policy will require 10+ chars and rejects `bdn2026` outright).
 
 **Severity: critical — assume this credential is already compromised.**
 
@@ -39,6 +53,10 @@ Written 2026-07-20, after the session that added password hashing and JWT sessio
 ---
 
 ## 2. Request, subtask, and comment endpoints have no authentication at all
+
+**Status: done.** The *simplest* option was taken: every write is behind `requireUser`, and `GET /api/requests/:id/subtasks` and `.../comments` stay public so the tracking page keeps working without a login. `PATCH /api/requests/:id/status` is `requireUser` (not `requireAdmin`) — the whole team moves requests along, and the misleading "admin only" comment was corrected. `POST .../comments` now takes `authorName` from the session, so the body can no longer claim to be someone else.
+
+**Left open:** anyone with a request ID still reads that request's task list and internal comments. That is the accepted tradeoff of this option, and it makes **item 3 the thing that actually contains the exposure** — until IDs stop being guessable, "you need the ID" is a weak barrier.
 
 **Severity: critical.**
 
@@ -101,7 +119,9 @@ Note the second option is also a privacy fix in its own right: today the public 
 
 ## 3. Request tracking IDs are guessable
 
-**Severity: medium.**
+**Status: not done — and its priority went UP.** Item 2 was resolved by leaving the subtask and comment `GET`s public, so a guessed ID now yields the request *plus* its internal task list and staff comments. Treat this as the next piece of work.
+
+**Severity: medium → high, given how item 2 was resolved.**
 
 **Where:** `GET /api/requests/:id` is public by design (tracking), and IDs come from `generateRequestId()` in [`server/storage-dynamo.ts`](../server/storage-dynamo.ts) — timestamp-derived and sequential-ish.
 
@@ -114,6 +134,10 @@ Note the second option is also a privacy fix in its own right: today the public 
 ---
 
 ## 4. Login has no rate limiting
+
+**Status: done, with one deliberate change from the plan below.** Both limiters set `skipSuccessfulRequests: true`, so only *failed* attempts count. Without it, a team sharing one wi-fi (one IP after NAT) would lock itself out on a Sunday morning — a successful login by one volunteer was consuming another's quota. This costs nothing against brute force, where every guess is a failure. The per-IP limit is 30/15min, the per-account limit is 10/15min, and a broad 600/15min limiter sits on `/api`. `trust proxy` is set in [`server/index.ts`](../server/index.ts) **and** [`server/lambda.ts`](../server/lambda.ts) — the Lambda builds its own Express app and does not go through `index.ts`, so production would otherwise have missed it.
+
+Verified: the 11th wrong password for one account returns 429 while other accounts on the same IP still log in.
 
 **Severity: high.**
 
@@ -151,6 +175,8 @@ Consider a second limiter keyed on `username` so one account can't be attacked f
 
 ## 5. The session token lives in `localStorage`, readable by any XSS
 
+**Status: not done** — deliberately deferred as a larger refactor.
+
 **Severity: medium (design tradeoff, not a bug).**
 
 **Where:** [`client/src/lib/auth.ts`](../client/src/lib/auth.ts) persists `{token, user}` under `bdn-auth-session`.
@@ -174,6 +200,10 @@ If you skip this, at minimum keep the token TTL short and make sure no third-par
 
 ## 6. Weak password policy, no reset flow
 
+**Status: steps 1-3 done, steps 4-5 still open.** `passwordIssue()` in [`shared/schema.ts`](../shared/schema.ts) enforces a 10-character floor plus a blocklist (`bdn2026`, `123456…`, church name, the username itself) and is applied to `changePasswordSchema` **and** `adminCreateUserSchema`, plus mirrored in both UI forms so the error shows before submitting.
+
+**Still to do:** step 4 (`mustChangePassword` on admin-created accounts) and step 5 (self-service e-mail reset).
+
 **Severity: medium.**
 
 **Where:** `changePasswordSchema` in [`shared/schema.ts`](../shared/schema.ts) requires 6 characters; `adminCreateUserSchema` sets no minimum at all.
@@ -193,6 +223,8 @@ If you skip this, at minimum keep the token TTL short and make sure no third-par
 ---
 
 ## 7. Every logged-in user can read the whole team's contact details
+
+**Status: done** exactly as sketched below. Verified: a volunteer token gets `id, username, displayName, isAdmin, roles`; an admin token still gets `email`/`phone`/`cellName`/`cellLeaders`. `/usuarios` was unaffected (it reads the user's own record from `/api/auth/me`) and `/equipes` is admin-only.
 
 **Severity: medium (privacy).**
 
@@ -223,6 +255,8 @@ The `/equipes` page (admin-only) keeps showing contact info; the escalas compone
 
 ## 8. Dev seed credentials live in the source
 
+**Status: done.** All six seed users share `DEV_SEED_PASSWORD`, or a `randomBytes(12)` value printed once at startup. The `MemStorage` constructor also throws outright if `NODE_ENV === "production"`, so a misconfigured deploy fails loudly instead of quietly standing up seeded accounts.
+
 **Severity: low (dev-only, but poor hygiene).**
 
 **Where:** the `MemStorage` constructor in [`server/storage.ts`](../server/storage.ts) — `admin`/`bdn2026`, `lucas`/`lucas2026`, and four more.
@@ -243,6 +277,10 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 
 ## 9. No audit trail, no account lockout
 
+**Status: step 4 done, steps 1-3 still open.** The request logger was writing every response body to CloudWatch — including the login response, session token and all, and the whole team's e-mails and phone numbers on `/api/users`. It now logs method, path, status and duration only. Request bodies were never logged, so the login password was not exposed.
+
+**Still to do:** the `audit` table (steps 1-2) and account lockout (step 3). Note that item 4's per-account rate limit now covers part of what lockout was for.
+
 **Severity: medium.**
 
 **Why it matters:** nothing records who logged in, who failed to, who promoted whom to admin, or who deleted an account. After an incident you cannot answer "what happened". Related: an attacker can keep guessing one account's password forever (rate limiting in item 4 slows this but doesn't stop a slow, distributed attempt).
@@ -260,6 +298,8 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 
 ## 10. CORS allows every origin
 
+**Status: done, resolved differently than proposed below.** The client calls `/api` with relative URLs through CloudFront, which proxies to API Gateway — so the app is **same-origin and needs no CORS at all**. Rather than naming the CloudFront domain (which this same Terraform config creates, a chicken-and-egg on first apply), `cors_allowed_origins` now defaults to `[]` and a `validation` block rejects `"*"`. Only fill it in if something starts calling API Gateway directly.
+
 **Severity: low-medium.**
 
 **Where:** [`infra/variables.tf`](../infra/variables.tf) — `cors_allowed_origins` defaults to `["*"]`, consumed by [`infra/api_gateway.tf`](../infra/api_gateway.tf).
@@ -272,6 +312,10 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 
 ## 11. No security headers
 
+**Status: done, minus the CSP.** `helmet({ contentSecurityPolicy: false })` is applied in both [`server/index.ts`](../server/index.ts) and [`server/lambda.ts`](../server/lambda.ts), and `helmet` was added to the bundle allowlist in [`script/build.ts`](../script/build.ts) (verified: it lands inside `dist/lambda.js`, not as an external require). Confirmed live: `Strict-Transport-Security`, `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `X-DNS-Prefetch-Control`.
+
+**Still to do:** the CSP itself, which is the header that would actually limit the damage of item 5. It needs tuning against the Vite production build.
+
 **Severity: low-medium.**
 
 **Where:** [`server/index.ts`](../server/index.ts) sets none.
@@ -283,6 +327,8 @@ Log the generated password once at startup in dev so you can still log in. Keep 
 ---
 
 ## 12. Dependency vulnerabilities
+
+**Status: not done.**
 
 **Severity: unknown until reviewed.**
 

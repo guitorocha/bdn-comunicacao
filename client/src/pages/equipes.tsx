@@ -21,6 +21,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
+import { PASSWORD_MIN_LENGTH, passwordIssue } from "@shared/schema";
 import { ArrowLeft, Plus, Shield, ShieldOff, Trash2, User, Users } from "lucide-react";
 import { Link, Redirect } from "wouter";
 import { Navbar } from "@/components/Navbar";
@@ -113,7 +114,9 @@ function CreateUserForm() {
     },
   });
 
-  const canSubmit = username.trim() && password.trim() && displayName.trim();
+  // Mesma política do servidor, avaliada enquanto digita
+  const policyIssue = password.length > 0 ? passwordIssue(password.trim(), username) : null;
+  const canSubmit = username.trim() && password.trim() && displayName.trim() && !policyIssue;
 
   return (
     <Card className="p-6 space-y-4">
@@ -148,11 +151,12 @@ function CreateUserForm() {
           <Input
             id="new-password"
             type="password"
-            placeholder="********"
+            placeholder={`Mínimo ${PASSWORD_MIN_LENGTH} caracteres`}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             data-testid="input-new-password"
           />
+          {policyIssue && <p className="text-xs text-destructive">{policyIssue}</p>}
         </div>
         <div className="flex items-end gap-3 pb-1">
           <div className="flex items-center gap-2">
