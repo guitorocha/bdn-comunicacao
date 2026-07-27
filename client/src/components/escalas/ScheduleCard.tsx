@@ -4,16 +4,24 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Clock, Pencil, Trash2 } from "lucide-react";
 import { SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, type Schedule } from "@shared/schema";
-import { formatScheduleDate, ROLE_BADGE_CLASSES, ROLE_ICONS } from "@/lib/escalas";
+import {
+  formatScheduleDate, monthlyLoadOf, ROLE_BADGE_CLASSES, ROLE_ICONS,
+  scheduleMonth, OVERLOAD_THRESHOLD, type MonthlyLoad,
+} from "@/lib/escalas";
+import { OverloadWarning } from "@/components/escalas/OverloadWarning";
 
 interface ScheduleCardProps {
   schedule: Schedule;
   highlightVolunteerId?: number | null;
+  // Só o admin recebe: marca quem já passou do limite de escalas neste mês
+  monthlyLoad?: MonthlyLoad;
   onEdit?: (schedule: Schedule) => void;
   onDelete?: (schedule: Schedule) => void;
 }
 
-export function ScheduleCard({ schedule, highlightVolunteerId, onEdit, onDelete }: ScheduleCardProps) {
+export function ScheduleCard({ schedule, highlightVolunteerId, monthlyLoad, onEdit, onDelete }: ScheduleCardProps) {
+  const month = scheduleMonth(schedule.eventDate);
+
   return (
     <Card className="p-5 space-y-4" data-testid={`card-schedule-${schedule.id}`}>
       <div className="flex items-start justify-between gap-3">
@@ -52,6 +60,9 @@ export function ScheduleCard({ schedule, highlightVolunteerId, onEdit, onDelete 
           const assignment = schedule.assignments.find((a) => a.role === role);
           const Icon = ROLE_ICONS[role];
           const isMine = assignment && highlightVolunteerId != null && assignment.volunteerId === highlightVolunteerId;
+          const monthCount = assignment && monthlyLoad
+            ? monthlyLoadOf(monthlyLoad, assignment.volunteerId, month)
+            : 0;
           return (
             <div
               key={role}
@@ -66,6 +77,12 @@ export function ScheduleCard({ schedule, highlightVolunteerId, onEdit, onDelete 
               <span className={`text-sm truncate ${assignment ? "" : "text-muted-foreground"}`}>
                 {assignment ? assignment.volunteerName : "—"}
               </span>
+              {assignment && monthCount >= OVERLOAD_THRESHOLD && (
+                <OverloadWarning
+                  months={[{ month, count: monthCount }]}
+                  testId={`warning-overload-schedule-${schedule.id}-${role}`}
+                />
+              )}
             </div>
           );
         })}

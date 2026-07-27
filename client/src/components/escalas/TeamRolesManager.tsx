@@ -13,18 +13,21 @@ import {
   SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS,
   type SafeUser, type ScheduleRole, type Unavailability,
 } from "@shared/schema";
-import { todayISO } from "@/lib/escalas";
+import { currentMonth, overloadedMonths, todayISO, type MonthlyLoad } from "@/lib/escalas";
+import { OverloadWarning } from "@/components/escalas/OverloadWarning";
 
 interface TeamRolesManagerProps {
   users: SafeUser[];
   unavailability: Unavailability[];
+  monthlyLoad: MonthlyLoad;
 }
 
 // Admin panel: assigns ministry functions to registered users.
 // Users with at least one function become schedulable volunteers.
-export function TeamRolesManager({ users, unavailability }: TeamRolesManagerProps) {
+export function TeamRolesManager({ users, unavailability, monthlyLoad }: TeamRolesManagerProps) {
   const { toast } = useToast();
   const today = todayISO();
+  const thisMonth = currentMonth();
 
   const rolesMutation = useMutation({
     mutationFn: async ({ id, roles }: { id: number; roles: ScheduleRole[] }) => {
@@ -72,10 +75,12 @@ export function TeamRolesManager({ users, unavailability }: TeamRolesManagerProp
           const upcomingUnavailable = unavailability
             .filter((entry) => entry.userId === u.id && entry.date >= today)
             .map((entry) => entry.date);
+          const overloaded = overloadedMonths(monthlyLoad, u.id, thisMonth);
           return (
             <div key={u.id} className="space-y-2" data-testid={`team-user-${u.id}`}>
               <div className="flex items-center gap-2">
                 <span className="text-sm font-semibold">{u.displayName}</span>
+                <OverloadWarning months={overloaded} testId={`warning-overload-user-${u.id}`} />
                 {u.isAdmin && (
                   <Badge className="bg-primary/10 text-primary border-primary/20 border text-xs">Admin</Badge>
                 )}

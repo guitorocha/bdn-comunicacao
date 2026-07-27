@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,11 @@ import {
   type InsertSchedule, type SafeUser, type Schedule, type ScheduleAssignment,
   type ScheduleRole, type Unavailability,
 } from "@shared/schema";
-import { ROLE_ICONS } from "@/lib/escalas";
+import {
+  incrementMonthlyLoad, monthlyLoadByVolunteer, monthlyLoadOf, OVERLOAD_THRESHOLD,
+  ROLE_ICONS, scheduleMonth,
+} from "@/lib/escalas";
+import { OverloadWarning } from "@/components/escalas/OverloadWarning";
 
 const NONE = "none";
 
@@ -26,10 +30,11 @@ interface ScheduleFormDialogProps {
   onOpenChange: (open: boolean) => void;
   volunteers: SafeUser[]; // registered users; only those with roles are selectable
   unavailability: Unavailability[];
+  schedules: Schedule[]; // todas as escalas salvas, para contar a carga do mês
   schedule?: Schedule | null; // when set, edits instead of creating
 }
 
-export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailability, schedule }: ScheduleFormDialogProps) {
+export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailability, schedules, schedule }: ScheduleFormDialogProps) {
   const { toast } = useToast();
   const isEditing = !!schedule;
 
@@ -84,6 +89,24 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
 
   const isUnavailable = (userId: number) =>
     !!eventDate && unavailability.some((u) => u.userId === userId && u.date === eventDate);
+
+  const formMonth = eventDate ? scheduleMonth(eventDate) : null;
+
+  // Carga do mês da data escolhida já contando as seleções deste formulário: a
+  // escala em edição sai da conta das salvas e volta como está na tela agora
+  const monthlyLoad = useMemo(() => {
+    const load = monthlyLoadByVolunteer(schedules.filter((s) => s.id !== schedule?.id));
+    if (formMonth) {
+      const selected = new Set(
+        Object.values(roleSelections).filter((v) => v !== NONE).map(Number)
+      );
+      selected.forEach((id) => incrementMonthlyLoad(load, id, formMonth));
+    }
+    return load;
+  }, [schedules, schedule?.id, formMonth, roleSelections]);
+
+  const overloadCount = (userId: number) =>
+    formMonth ? monthlyLoadOf(monthlyLoad, userId, formMonth) : 0;
 
   const handleSubmit = () => {
     if (!title.trim() || !eventDate || !eventTime) {
@@ -173,6 +196,8 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
             {SCHEDULE_ROLES.map((role) => {
               const Icon = ROLE_ICONS[role];
               const eligible = volunteers.filter((v) => v.roles.includes(role));
+              const selectedId = roleSelections[role] === NONE ? null : Number(roleSelections[role]);
+              const selectedCount = selectedId ? overloadCount(selectedId) : 0;
               return (
                 <div key={role} className="flex items-center gap-3">
                   <div className="flex items-center gap-2 w-40 shrink-0 text-sm">
@@ -188,13 +213,28 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value={NONE}>— Sem voluntário —</SelectItem>
-                      {eligible.map((v) => (
-                        <SelectItem key={v.id} value={String(v.id)}>
-                          {v.displayName}{isUnavailable(v.id) ? " (indisponível nesta data)" : ""}
-                        </SelectItem>
-                      ))}
+                      {eligible.map((v) => {
+                        // O aviso do trigger fica fora do Select; aqui vai como texto,
+                        // porque o conteúdo do item é reaproveitado no próprio trigger
+                        const count = overloadCount(v.id);
+                        const notes = [
+                          isUnavailable(v.id) ? "indisponível nesta data" : null,
+                          count >= OVERLOAD_THRESHOLD ? `${count} escalas neste mês` : null,
+                        ].filter(Boolean);
+                        return (
+                          <SelectItem key={v.id} value={String(v.id)}>
+                            {v.displayName}{notes.length > 0 ? ` (${notes.join(", ")})` : ""}
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
+                  {selectedId && selectedCount >= OVERLOAD_THRESHOLD && formMonth && (
+                    <OverloadWarning
+                      months={[{ month: formMonth, count: selectedCount }]}
+                      testId={`warning-overload-role-${role}`}
+                    />
+                  )}
                 </div>
               );
             })}
