@@ -1,14 +1,9 @@
 export function PerplexityAttribution() {
   return (
-    <footer className="w-full py-4 text-center text-xs text-muted-foreground">
-      <a
-        href="https://www.perplexity.ai/computer"
-        target="_blank"
-        rel="noopener noreferrer"
-        className="hover:text-foreground transition-colors"
-      >
-        Created with Perplexity Computer
-      </a>
+    <footer className="w-full py-6 text-center text-xs text-muted-foreground space-y-1">
+      <p className="font-semibold text-foreground">Igreja Bola de Neve Nação</p>
+      <p>Rua Tomazzo Ferrara, 132 — Itaquera — São Paulo/SP</p>
+      <p className="pt-2 text-muted-foreground/50">Copyright © {new Date().getFullYear()} - Comunicação Nação</p>
     </footer>
   );
 }

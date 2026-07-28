@@ -3,17 +3,34 @@ import {
   type Request, type InsertRequest,
   type Subtask, type InsertSubtask,
   type Comment, type InsertComment,
+  type Schedule, type InsertSchedule,
+  type Unavailability, type InsertUnavailability,
+  type ScheduleRole,
+  type UpdateProfile,
+  type AuditEntry, type InsertAuditEntry,
 } from "@shared/schema";
+import { randomBytes } from "node:crypto";
+import { hashPassword, isHashed } from "./password";
 
 export interface IStorage {
   // Users
   getUser(id: number): Promise<User | undefined>;
   getUserByUsername(username: string): Promise<User | undefined>;
   createUser(user: InsertUser): Promise<User>;
-  createUserAdmin(user: AdminCreateUser): Promise<User>;
+  createUserAdmin(user: AdminCreateUser & { mustChangePassword?: boolean }): Promise<User>;
   getAllUsers(): Promise<User[]>;
   deleteUser(id: number): Promise<boolean>;
   updateUserAdmin(id: number, isAdmin: boolean): Promise<User | undefined>;
+  updateUserRoles(id: number, roles: ScheduleRole[]): Promise<User | undefined>;
+  updateUserProfile(id: number, profile: UpdateProfile): Promise<User | undefined>;
+  // `mustChangePassword` acompanha a senha: some quando o dono escolhe a sua,
+  // liga quando um admin define uma provisória.
+  updateUserPassword(id: number, password: string, mustChangePassword?: boolean): Promise<User | undefined>;
+  // Contador de senhas erradas e bloqueio permanente da conta
+  updateUserLockState(id: number, state: { failedLoginCount: number; lockedAt: string | null }): Promise<User | undefined>;
+  // Auditoria (append-only)
+  createAuditEntry(entry: InsertAuditEntry): Promise<AuditEntry>;
+  getRecentAuditEntries(limit: number): Promise<AuditEntry[]>;
   // Requests
   getRequest(id: number): Promise<Request | undefined>;
   getAllRequests(): Promise<Request[]>;
@@ -28,32 +45,67 @@ export interface IStorage {
   // Comments
   getCommentsByRequest(requestId: number): Promise<Comment[]>;
   createComment(comment: InsertComment): Promise<Comment>;
+  // Unavailability
+  getAllUnavailability(): Promise<Unavailability[]>;
+  getUnavailabilityByUser(userId: number): Promise<Unavailability[]>;
+  createUnavailability(entry: InsertUnavailability): Promise<Unavailability>;
+  getUnavailabilityEntry(id: number): Promise<Unavailability | undefined>;
+  deleteUnavailability(id: number): Promise<boolean>;
+  // Schedules
+  getAllSchedules(): Promise<Schedule[]>;
+  getSchedule(id: number): Promise<Schedule | undefined>;
+  createSchedule(schedule: InsertSchedule): Promise<Schedule>;
+  updateSchedule(id: number, schedule: InsertSchedule): Promise<Schedule | undefined>;
+  deleteSchedule(id: number): Promise<boolean>;
 }
+
+// Profile fields start empty — the member fills them in on /usuarios
+const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: null };
+
+// Conta nova nasce liberada e sem histórico de erro
+const unlocked = { failedLoginCount: 0, lockedAt: null };
 
 export class MemStorage implements IStorage {
   private users: Map<number, User> = new Map();
+  private auditLog: AuditEntry[] = [];
+  private nextAuditId = 1;
   private requests: Map<number, Request> = new Map();
   private subtasks: Map<number, Subtask> = new Map();
   private comments: Map<number, Comment> = new Map();
+  private schedules: Map<number, Schedule> = new Map();
+  private unavailabilityEntries: Map<number, Unavailability> = new Map();
   private nextUserId = 1;
   private nextRequestId = 1000;
   private nextSubtaskId = 1;
   private nextCommentId = 1;
+  private nextScheduleId = 1;
+  private nextUnavailabilityId = 1;
 
   constructor() {
-    // Seed users
-    this.createUserAdmin({
-      username: "admin",
-      password: "bdn2026",
-      displayName: "Administrador",
-      isAdmin: true,
-    });
-    this.createUserAdmin({
-      username: "comunicacao",
-      password: "comunica2026",
-      displayName: "Equipe Comunicação",
-      isAdmin: false,
-    });
+    // Seed users (dev only). Users with roles are the schedulable volunteers.
+    // Nenhuma senha fica no código: usa DEV_SEED_PASSWORD ou sorteia uma e
+    // imprime no console. O seed nunca roda em produção.
+    if (process.env.NODE_ENV === "production") {
+      throw new Error("MemStorage não pode ser usado em produção");
+    }
+
+    const seedPassword = process.env.DEV_SEED_PASSWORD ?? randomBytes(12).toString("hex");
+    if (!process.env.DEV_SEED_PASSWORD) {
+      console.log(`[seed] senha dos usuários de desenvolvimento: ${seedPassword}`);
+    }
+
+    const seedUsers: Array<{ username: string; displayName: string; isAdmin: boolean; roles: ScheduleRole[] }> = [
+      { username: "admin", displayName: "Administrador", isAdmin: true, roles: [] },
+      { username: "comunicacao", displayName: "Equipe Comunicação", isAdmin: false, roles: ["projecao"] },
+      { username: "lucas", displayName: "Lucas Almeida", isAdmin: false, roles: ["fotografia", "filmmaker"] },
+      { username: "mariana", displayName: "Mariana Souza", isAdmin: false, roles: ["fotografia"] },
+      { username: "pedro", displayName: "Pedro Santos", isAdmin: false, roles: ["projecao", "transmissao"] },
+      { username: "gabriel", displayName: "Gabriel Costa", isAdmin: false, roles: ["transmissao", "filmmaker"] },
+    ];
+
+    for (const user of seedUsers) {
+      this.createUserAdmin({ ...user, password: seedPassword });
+    }
   }
 
   // Users
@@ -67,14 +119,33 @@ export class MemStorage implements IStorage {
 
   async createUser(data: InsertUser): Promise<User> {
     const id = this.nextUserId++;
-    const user: User = { id, ...data, isAdmin: false };
+    const user: User = {
+      ...emptyProfile,
+      ...unlocked,
+      id,
+      ...data,
+      password: isHashed(data.password) ? data.password : hashPassword(data.password),
+      isAdmin: false,
+      roles: data.roles ?? [],
+      mustChangePassword: false,
+    };
     this.users.set(id, user);
     return user;
   }
 
-  async createUserAdmin(data: AdminCreateUser): Promise<User> {
+  async createUserAdmin(data: AdminCreateUser & { mustChangePassword?: boolean }): Promise<User> {
     const id = this.nextUserId++;
-    const user: User = { id, ...data, isAdmin: data.isAdmin ?? false };
+    const user: User = {
+      ...emptyProfile,
+      ...unlocked,
+      id,
+      ...data,
+      // O seed usa senhas em texto puro — guarda sempre o hash
+      password: isHashed(data.password) ? data.password : hashPassword(data.password),
+      isAdmin: data.isAdmin ?? false,
+      roles: data.roles ?? [],
+      mustChangePassword: data.mustChangePassword ?? false,
+    };
     this.users.set(id, user);
     return user;
   }
@@ -93,6 +164,60 @@ export class MemStorage implements IStorage {
     user.isAdmin = isAdmin;
     this.users.set(id, user);
     return user;
+  }
+
+  async updateUserRoles(id: number, roles: ScheduleRole[]): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    user.roles = roles;
+    this.users.set(id, user);
+    return user;
+  }
+
+  async updateUserProfile(id: number, profile: UpdateProfile): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    const updated: User = {
+      ...user,
+      displayName: profile.displayName,
+      email: profile.email || null,
+      phone: profile.phone || null,
+      cellName: profile.cellName || null,
+      cellLeaders: profile.cellLeaders || null,
+    };
+    this.users.set(id, updated);
+    return updated;
+  }
+
+  async updateUserPassword(id: number, password: string, mustChangePassword = false): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    user.password = password;
+    user.mustChangePassword = mustChangePassword;
+    this.users.set(id, user);
+    return user;
+  }
+
+  async updateUserLockState(
+    id: number,
+    state: { failedLoginCount: number; lockedAt: string | null },
+  ): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    const updated: User = { ...user, ...state };
+    this.users.set(id, updated);
+    return updated;
+  }
+
+  // Auditoria
+  async createAuditEntry(entry: InsertAuditEntry): Promise<AuditEntry> {
+    const record: AuditEntry = { id: this.nextAuditId++, at: new Date().toISOString(), ...entry };
+    this.auditLog.push(record);
+    return record;
+  }
+
+  async getRecentAuditEntries(limit: number): Promise<AuditEntry[]> {
+    return [...this.auditLog].reverse().slice(0, limit);
   }
 
   // Requests
@@ -180,6 +305,83 @@ export class MemStorage implements IStorage {
     this.comments.set(id, comment);
     return comment;
   }
+
+  // Unavailability
+  async getAllUnavailability(): Promise<Unavailability[]> {
+    return Array.from(this.unavailabilityEntries.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async getUnavailabilityByUser(userId: number): Promise<Unavailability[]> {
+    return Array.from(this.unavailabilityEntries.values())
+      .filter((u) => u.userId === userId)
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  async createUnavailability(data: InsertUnavailability): Promise<Unavailability> {
+    const sameDate = Array.from(this.unavailabilityEntries.values()).filter(
+      (u) => u.userId === data.userId && u.date === data.date
+    );
+    // "Dia inteiro" já cobre qualquer período pedido depois
+    const wholeDay = sameDate.find((u) => u.period === "dia");
+    if (wholeDay) return wholeDay;
+    const duplicate = sameDate.find((u) => u.period === data.period);
+    if (duplicate) return duplicate;
+    // ...e, quando chega, absorve os períodos já registrados naquele dia
+    if (data.period === "dia") {
+      sameDate.forEach((u) => this.unavailabilityEntries.delete(u.id));
+    }
+    const id = this.nextUnavailabilityId++;
+    const entry: Unavailability = { id, ...data, createdAt: new Date().toISOString() };
+    this.unavailabilityEntries.set(id, entry);
+    return entry;
+  }
+
+  async getUnavailabilityEntry(id: number): Promise<Unavailability | undefined> {
+    return this.unavailabilityEntries.get(id);
+  }
+
+  async deleteUnavailability(id: number): Promise<boolean> {
+    return this.unavailabilityEntries.delete(id);
+  }
+
+  // Schedules
+  async getAllSchedules(): Promise<Schedule[]> {
+    return Array.from(this.schedules.values()).sort((a, b) =>
+      `${a.eventDate} ${a.eventTime}`.localeCompare(`${b.eventDate} ${b.eventTime}`)
+    );
+  }
+
+  async getSchedule(id: number): Promise<Schedule | undefined> {
+    return this.schedules.get(id);
+  }
+
+  async createSchedule(data: InsertSchedule): Promise<Schedule> {
+    const id = this.nextScheduleId++;
+    const schedule: Schedule = {
+      id,
+      ...data,
+      notes: data.notes ?? null,
+      createdAt: new Date().toISOString(),
+    };
+    this.schedules.set(id, schedule);
+    return schedule;
+  }
+
+  async updateSchedule(id: number, data: InsertSchedule): Promise<Schedule | undefined> {
+    const existing = this.schedules.get(id);
+    if (!existing) return undefined;
+    const updated: Schedule = { ...existing, ...data, notes: data.notes ?? null };
+    this.schedules.set(id, updated);
+    return updated;
+  }
+
+  async deleteSchedule(id: number): Promise<boolean> {
+    return this.schedules.delete(id);
+  }
 }
 
-export const storage = new MemStorage();
+import { DynamoStorage } from "./storage-dynamo";
+
+export const storage = process.env.NODE_ENV === "production"
+  ? new DynamoStorage()   // Lambda + DynamoDB
+  : new MemStorage();     // Dev local (sem AWS)

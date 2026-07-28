@@ -29,12 +29,35 @@ export default function Login() {
       const res = await apiRequest("POST", "/api/auth/login", data);
       return await res.json();
     },
-    onSuccess: (user) => {
+    onSuccess: ({ user }) => {
+      // O token não vem no corpo: ficou no cookie HttpOnly gravado pelo servidor
       login(user);
-      navigate("/admin");
+      // Senha provisória (conta criada ou redefinida por um admin): trocar antes
+      // de qualquer outra coisa — só o dono deve conhecer a própria senha.
+      if (user.mustChangePassword) {
+        toast({
+          title: "Defina sua senha",
+          description: "Sua senha foi definida por um administrador. Escolha uma nova para continuar.",
+        });
+        navigate("/usuarios");
+        return;
+      }
+      // Volta para a página que pediu o login (?next=...), senão vai às escalas.
+      // O wouter (useHashLocation) guarda a query real em window.location.search,
+      // não no hash — por isso lemos de search aqui.
+      const params = new URLSearchParams(window.location.search);
+      const next = params.get("next");
+      navigate(next && next.startsWith("/") ? next : "/escalas");
     },
-    onError: () => {
-      toast({ title: "Erro de autenticação", description: "Usuário ou senha inválidos.", variant: "destructive" });
+    onError: (err: Error) => {
+      // A mensagem vem do servidor: além de "credenciais inválidas", ela explica
+      // a conta bloqueada por tentativas — sem isso a pessoa fica sem saber por
+      // que a senha certa não entra, nem que precisa procurar um admin.
+      toast({
+        title: "Erro de autenticação",
+        description: err.message || "Usuário ou senha inválidos.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -66,7 +89,7 @@ export default function Login() {
         <div className="text-center">
           <Link href="/">
             <Button variant="ghost" size="sm" className="text-muted-foreground">
-              <ArrowLeft className="w-4 h-4 mr-1" /> Voltar ao formulário
+              <ArrowLeft className="w-4 h-4 mr-1" /> Voltar ao início
             </Button>
           </Link>
         </div>

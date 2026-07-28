@@ -1,12 +1,29 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { clearSession } from "./auth";
 
 const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
 
+// A sessão vai no cookie HttpOnly "bdn_session", que o navegador anexa sozinho
+// quando o fetch pede credenciais. O app não tem mais o token em mãos.
+const CREDENTIALS: RequestCredentials = "include";
+
+// Sessão expirada/inválida: encerra a sessão local para o app voltar ao login
+function handleUnauthorized(res: Response) {
+  if (res.status === 401) clearSession();
+}
+
 async function throwIfResNotOk(res: Response) {
-  if (!res.ok) {
-    const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+  if (res.ok) return;
+  const text = await res.text();
+  // A API responde erros como { message }: usa isso no toast em vez do corpo cru
+  let message = text || res.statusText;
+  try {
+    const parsed = JSON.parse(text);
+    if (typeof parsed?.message === "string") message = parsed.message;
+  } catch {
+    // corpo não é JSON — mantém o texto original
   }
+  throw new Error(message);
 }
 
 export async function apiRequest(
@@ -17,9 +34,11 @@ export async function apiRequest(
   const res = await fetch(`${API_BASE}${url}`, {
     method,
     headers: data ? { "Content-Type": "application/json" } : {},
+    credentials: CREDENTIALS,
     body: data ? JSON.stringify(data) : undefined,
   });
 
+  handleUnauthorized(res);
   await throwIfResNotOk(res);
   return res;
 }
@@ -30,7 +49,11 @@ export const getQueryFn: <T>(options: {
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
   async ({ queryKey }) => {
-    const res = await fetch(`${API_BASE}${queryKey.join("/")}`);
+    const res = await fetch(`${API_BASE}${queryKey.join("/")}`, {
+      credentials: CREDENTIALS,
+    });
+
+    handleUnauthorized(res);
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;
