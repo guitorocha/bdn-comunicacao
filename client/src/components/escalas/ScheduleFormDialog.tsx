@@ -15,11 +15,11 @@ import { useToast } from "@/hooks/use-toast";
 import {
   SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS,
   type InsertSchedule, type SafeUser, type Schedule, type ScheduleAssignment,
-  type ScheduleRole, type Unavailability,
+  type ScheduleRole, type Unavailability, type UnavailabilityPeriod,
 } from "@shared/schema";
 import {
-  incrementMonthlyLoad, monthlyLoadByVolunteer, monthlyLoadOf, OVERLOAD_THRESHOLD,
-  ROLE_ICONS, scheduleMonth,
+  blocksPeriod, incrementMonthlyLoad, monthlyLoadByVolunteer, monthlyLoadOf, OVERLOAD_THRESHOLD,
+  periodOfTime, ROLE_ICONS, scheduleMonth, UNAVAILABLE_NOTE,
 } from "@/lib/escalas";
 import { OverloadWarning } from "@/components/escalas/OverloadWarning";
 
@@ -87,8 +87,17 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
     },
   });
 
-  const isUnavailable = (userId: number) =>
-    !!eventDate && unavailability.some((u) => u.userId === userId && u.date === eventDate);
+  // O período vem do horário do evento, então o aviso reavalia quando o admin
+  // troca o horário: quem só bloqueou a manhã continua livre no culto da noite
+  const eventPeriod = eventTime ? periodOfTime(eventTime) : null;
+
+  const unavailableAs = (userId: number): UnavailabilityPeriod | null => {
+    if (!eventDate || !eventPeriod) return null;
+    const entry = unavailability.find(
+      (u) => u.userId === userId && u.date === eventDate && blocksPeriod(u.period, eventPeriod)
+    );
+    return entry?.period ?? null;
+  };
 
   const formMonth = eventDate ? scheduleMonth(eventDate) : null;
 
@@ -217,8 +226,9 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
                         // O aviso do trigger fica fora do Select; aqui vai como texto,
                         // porque o conteúdo do item é reaproveitado no próprio trigger
                         const count = overloadCount(v.id);
+                        const unavailablePeriod = unavailableAs(v.id);
                         const notes = [
-                          isUnavailable(v.id) ? "indisponível nesta data" : null,
+                          unavailablePeriod ? UNAVAILABLE_NOTE[unavailablePeriod] : null,
                           count >= OVERLOAD_THRESHOLD ? `${count} escalas neste mês` : null,
                         ].filter(Boolean);
                         return (

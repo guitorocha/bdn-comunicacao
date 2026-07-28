@@ -18,7 +18,7 @@ import {
   type Subtask, type InsertSubtask,
   type Comment, type InsertComment,
   type Schedule, type InsertSchedule,
-  type Unavailability, type InsertUnavailability,
+  type Unavailability, type InsertUnavailability, unavailabilityPeriod,
   type ScheduleRole,
   type UpdateProfile,
   type AuditEntry, type InsertAuditEntry,
@@ -66,6 +66,12 @@ function normalizeUser(item: Record<string, unknown> | undefined): User | undefi
     failedLoginCount: user.failedLoginCount ?? 0,
     lockedAt: user.lockedAt ?? null,
   };
+}
+
+// Indisponibilidades registradas antes do campo `period` bloqueavam o dia inteiro
+function normalizeUnavailability(item: Record<string, unknown>): Unavailability {
+  const entry = item as Unavailability;
+  return { ...entry, period: unavailabilityPeriod(entry.period) };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -391,7 +397,7 @@ export class DynamoStorage implements IStorage {
 
   async getAllUnavailability(): Promise<Unavailability[]> {
     const result = await db.send(new ScanCommand({ TableName: TABLE_UNAVAILABILITY }));
-    const items = (result.Items ?? []) as Unavailability[];
+    const items = (result.Items ?? []).map(normalizeUnavailability);
     return items.sort((a, b) => a.date.localeCompare(b.date));
   }
 
@@ -402,15 +408,22 @@ export class DynamoStorage implements IStorage {
       KeyConditionExpression: "userId = :u",
       ExpressionAttributeValues: { ":u": userId },
     }));
-    const items = (result.Items ?? []) as Unavailability[];
+    const items = (result.Items ?? []).map(normalizeUnavailability);
     return items.sort((a, b) => a.date.localeCompare(b.date));
   }
 
   async createUnavailability(data: InsertUnavailability): Promise<Unavailability> {
-    // Evita duplicatas (mesmo usuário + mesma data)
-    const existing = await this.getUnavailabilityByUser(data.userId);
-    const duplicate = existing.find((u) => u.date === data.date);
+    const sameDate = (await this.getUnavailabilityByUser(data.userId))
+      .filter((u) => u.date === data.date);
+    // "Dia inteiro" já cobre qualquer período pedido depois
+    const wholeDay = sameDate.find((u) => u.period === "dia");
+    if (wholeDay) return wholeDay;
+    const duplicate = sameDate.find((u) => u.period === data.period);
     if (duplicate) return duplicate;
+    // ...e, quando chega, absorve os períodos já registrados naquele dia
+    if (data.period === "dia") {
+      await Promise.all(sameDate.map((u) => this.deleteUnavailability(u.id)));
+    }
 
     const entry: Unavailability = {
       id: generateId(),
@@ -423,7 +436,7 @@ export class DynamoStorage implements IStorage {
 
   async getUnavailabilityEntry(id: number): Promise<Unavailability | undefined> {
     const result = await db.send(new GetCommand({ TableName: TABLE_UNAVAILABILITY, Key: { id } }));
-    return result.Item as Unavailability | undefined;
+    return result.Item ? normalizeUnavailability(result.Item) : undefined;
   }
 
   async deleteUnavailability(id: number): Promise<boolean> {

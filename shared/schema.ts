@@ -224,15 +224,36 @@ export const insertScheduleSchema = createInsertSchema(schedules, {
 export type InsertSchedule = z.infer<typeof insertScheduleSchema>;
 export type Schedule = typeof schedules.$inferSelect;
 
+// Períodos que o voluntário pode bloquear num dia. "dia" cobre os três outros.
+export const UNAVAILABILITY_PERIODS = ["manha", "tarde", "noite", "dia"] as const;
+export type UnavailabilityPeriod = (typeof UNAVAILABILITY_PERIODS)[number];
+
+export const UNAVAILABILITY_PERIOD_LABELS: Record<UnavailabilityPeriod, string> = {
+  manha: "Manhã",
+  tarde: "Tarde",
+  noite: "Noite",
+  dia: "Dia inteiro",
+};
+
+// Registros criados antes deste campo bloqueavam o dia inteiro
+export function unavailabilityPeriod(period?: string | null): UnavailabilityPeriod {
+  return UNAVAILABILITY_PERIODS.includes(period as UnavailabilityPeriod)
+    ? (period as UnavailabilityPeriod)
+    : "dia";
+}
+
 // Days a volunteer cannot serve — used by auto-generation and shown to admins
 export const unavailability = pgTable("unavailability", {
   id: integer("id").primaryKey(),
   userId: integer("user_id").notNull(),
   date: text("date").notNull(), // YYYY-MM-DD
+  period: text("period").$type<UnavailabilityPeriod>().notNull(), // manha | tarde | noite | dia
   createdAt: text("created_at").notNull(),
 });
 
-export const insertUnavailabilitySchema = createInsertSchema(unavailability).omit({
+export const insertUnavailabilitySchema = createInsertSchema(unavailability, {
+  period: z.enum(UNAVAILABILITY_PERIODS),
+}).omit({
   id: true,
   createdAt: true,
 });

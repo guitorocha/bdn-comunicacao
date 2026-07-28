@@ -318,10 +318,18 @@ export class MemStorage implements IStorage {
   }
 
   async createUnavailability(data: InsertUnavailability): Promise<Unavailability> {
-    const existing = Array.from(this.unavailabilityEntries.values()).find(
+    const sameDate = Array.from(this.unavailabilityEntries.values()).filter(
       (u) => u.userId === data.userId && u.date === data.date
     );
-    if (existing) return existing;
+    // "Dia inteiro" já cobre qualquer período pedido depois
+    const wholeDay = sameDate.find((u) => u.period === "dia");
+    if (wholeDay) return wholeDay;
+    const duplicate = sameDate.find((u) => u.period === data.period);
+    if (duplicate) return duplicate;
+    // ...e, quando chega, absorve os períodos já registrados naquele dia
+    if (data.period === "dia") {
+      sameDate.forEach((u) => this.unavailabilityEntries.delete(u.id));
+    }
     const id = this.nextUnavailabilityId++;
     const entry: Unavailability = { id, ...data, createdAt: new Date().toISOString() };
     this.unavailabilityEntries.set(id, entry);

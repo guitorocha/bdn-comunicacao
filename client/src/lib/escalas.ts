@@ -9,6 +9,7 @@ import {
   type ScheduleAssignment,
   type ScheduleRole,
   type Unavailability,
+  type UnavailabilityPeriod,
 } from "@shared/schema";
 
 export const ROLE_ICONS: Record<ScheduleRole, LucideIcon> = {
@@ -55,6 +56,32 @@ export function formatMonthLabel(month: string): string {
     return month;
   }
 }
+
+// ── Períodos do dia ─────────────────────────────────────────────────────────
+
+// Períodos que um culto pode ocupar — "dia" só existe do lado da indisponibilidade
+const EVENT_PERIODS: UnavailabilityPeriod[] = ["manha", "tarde", "noite"];
+
+// Horário do culto ("HH:mm") → período, para casar com a indisponibilidade
+export function periodOfTime(time: string): UnavailabilityPeriod {
+  const hour = Number(time.slice(0, 2));
+  if (hour < 12) return "manha";
+  if (hour < 18) return "tarde";
+  return "noite";
+}
+
+// "dia" bloqueia qualquer culto; os demais, só o período correspondente
+export function blocksPeriod(entry: UnavailabilityPeriod, event: UnavailabilityPeriod): boolean {
+  return entry === "dia" || entry === event;
+}
+
+// Aviso mostrado ao admin ao escolher um voluntário indisponível
+export const UNAVAILABLE_NOTE: Record<UnavailabilityPeriod, string> = {
+  manha: "indisponível de manhã",
+  tarde: "indisponível à tarde",
+  noite: "indisponível à noite",
+  dia: "indisponível neste dia",
+};
 
 // ── Sobrecarga de voluntários ───────────────────────────────────────────────
 
@@ -130,7 +157,7 @@ export interface ScheduleSlot {
 export type SlotsByWeekday = Record<number, ScheduleSlot[]>;
 
 export const DEFAULT_SCHEDULE_TIME = "18:00";
-export const DEFAULT_MORNING_TIME = "09:00";
+export const DEFAULT_MORNING_TIME = "10:00";
 
 let slotSeq = 0;
 
@@ -182,8 +209,10 @@ export interface AutoGenerateResult {
 // Distributes volunteers (registered users with roles) across dates by rotation:
 // for each role requested on that date, picks the eligible volunteer with the
 // fewest assignments (counting existing schedules + already generated ones),
-// skipping volunteers who registered unavailability for that date and avoiding
-// assigning the same person twice in the same event when possible.
+// skipping volunteers who registered unavailability for the period of that
+// service (a "dia" entry blocks every service of the day, "manha"/"tarde"/
+// "noite" only the matching one) and avoiding assigning the same person twice
+// in the same event when possible.
 export function autoGenerateSchedules(opts: {
   volunteers: SafeUser[];
   existing: Schedule[];
@@ -204,7 +233,12 @@ export function autoGenerateSchedules(opts: {
     })
   );
 
-  const unavailableOn = new Set(unavailability.map((u) => `${u.userId}:${u.date}`));
+  // Uma entrada de "dia inteiro" vira os três períodos; as demais, só o seu
+  const unavailableOn = new Set(
+    unavailability.flatMap((u) =>
+      (u.period === "dia" ? EVENT_PERIODS : [u.period]).map((p) => `${u.userId}:${u.date}:${p}`)
+    )
+  );
   // Two services on the same day are different escalas, so the horário is part
   // of the key — só é duplicata quando data e horário coincidem.
   const scheduledSlots = new Set(existing.map((s) => `${s.eventDate} ${s.eventTime}`));
@@ -218,12 +252,13 @@ export function autoGenerateSchedules(opts: {
     }
     scheduledSlots.add(`${date} ${time}`);
 
+    const eventPeriod = periodOfTime(time);
     const assignments: ScheduleAssignment[] = [];
     const usedInEvent = new Set<number>();
 
     for (const role of SCHEDULE_ROLES.filter((r) => roles.includes(r))) {
       const eligible = eligibleVolunteers
-        .filter((v) => v.roles.includes(role) && !unavailableOn.has(`${v.id}:${date}`))
+        .filter((v) => v.roles.includes(role) && !unavailableOn.has(`${v.id}:${date}:${eventPeriod}`))
         .sort((a, b) => {
           const diff = (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0);
           return diff !== 0 ? diff : a.displayName.localeCompare(b.displayName);

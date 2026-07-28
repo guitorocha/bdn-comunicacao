@@ -1,7 +1,7 @@
 import type { Express, Request as ExpressRequest, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isLocked, isRootAdmin, passwordIssue, MAX_FAILED_LOGINS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, type User } from "@shared/schema";
+import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isLocked, isRootAdmin, passwordIssue, MAX_FAILED_LOGINS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, UNAVAILABILITY_PERIODS, type User } from "@shared/schema";
 import { z } from "zod";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { recordAudit } from "./audit";
@@ -591,11 +591,19 @@ export async function registerRoutes(
   // Volunteers record their own unavailability
   app.post("/api/unavailability", requireUser, async (req, res) => {
     const user = (req as AuthedRequest).authUser!;
-    const parsed = z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).safeParse(req.body);
+    // Sem período informado, bloqueia o dia inteiro — como era antes do campo existir
+    const parsed = z.object({
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      period: z.enum(UNAVAILABILITY_PERIODS).default("dia"),
+    }).safeParse(req.body);
     if (!parsed.success) {
-      return res.status(400).json({ message: "Data inválida (use YYYY-MM-DD)" });
+      return res.status(400).json({ message: "Data ou período inválido (use YYYY-MM-DD)" });
     }
-    const entry = await storage.createUnavailability({ userId: user.id, date: parsed.data.date });
+    const entry = await storage.createUnavailability({
+      userId: user.id,
+      date: parsed.data.date,
+      period: parsed.data.period,
+    });
     return res.status(201).json(entry);
   });
 

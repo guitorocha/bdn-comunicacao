@@ -10,7 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { useToast } from "@/hooks/use-toast";
 import { CalendarX2, UserPlus, Users } from "lucide-react";
 import {
-  SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS,
+  SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, UNAVAILABILITY_PERIOD_LABELS,
   type SafeUser, type ScheduleRole, type Unavailability,
 } from "@shared/schema";
 import { currentMonth, overloadedMonths, todayISO, type MonthlyLoad } from "@/lib/escalas";
@@ -74,7 +74,9 @@ export function TeamRolesManager({ users, unavailability, monthlyLoad }: TeamRol
         {users.map((u) => {
           const upcomingUnavailable = unavailability
             .filter((entry) => entry.userId === u.id && entry.date >= today)
-            .map((entry) => entry.date);
+            .map((entry) => entry.period === "dia"
+              ? entry.date
+              : `${entry.date} (${UNAVAILABILITY_PERIOD_LABELS[entry.period]})`);
           const overloaded = overloadedMonths(monthlyLoad, u.id, thisMonth);
           return (
             <div key={u.id} className="space-y-2" data-testid={`team-user-${u.id}`}>
