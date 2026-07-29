@@ -74,6 +74,7 @@ builds sem mudança de código geram hash idêntico e não redeployam a Lambda �
 
 O segredo de assinatura dos tokens nunca é versionado: passe por variável de
 ambiente (mínimo 32 caracteres). Para gerar um novo, use `openssl rand -hex 32`.
+Não passar o segredo somente causa um logout forçado de todos os usuários logados.
 
 ```bash
 export TF_VAR_jwt_secret="<segredo>"   # PowerShell: $env:TF_VAR_jwt_secret = "<segredo>"
@@ -108,6 +109,18 @@ aws s3 sync ../dist/public s3://$BUCKET --delete
 aws cloudfront create-invalidation \
   --distribution-id $CF_ID \
   --paths "/*"
+```
+
+```powershell
+# Obtém o nome do bucket do output do Terraform
+$env:BUCKET=$(terraform output -raw s3_bucket_name)
+$env:CF_ID=$(terraform output -raw cloudfront_distribution_id)
+
+# Faz o sync dos arquivos estáticos
+aws s3 sync ../dist/public s3://$env:BUCKET --delete
+
+# Invalida o cache do CloudFront
+aws cloudfront create-invalidation --distribution-id $env:CF_ID --paths "/*"
 ```
 
 ## Storage

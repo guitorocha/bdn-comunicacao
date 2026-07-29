@@ -1,7 +1,11 @@
-import { Camera, Clapperboard, MonitorPlay, Radio, type LucideIcon } from "lucide-react";
+import { Camera, Clapperboard, GraduationCap, MonitorPlay, Radio, type LucideIcon } from "lucide-react";
 import { addDays, format, parseISO } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import {
+  EVENT_PERIODS,
+  isTrainingRole,
+  OPERATIONAL_ROLES,
+  periodOfTime,
   SCHEDULE_ROLES,
   type InsertSchedule,
   type SafeUser,
@@ -17,13 +21,17 @@ export const ROLE_ICONS: Record<ScheduleRole, LucideIcon> = {
   filmmaker: Clapperboard,
   projecao: MonitorPlay,
   transmissao: Radio,
+  treinamento: GraduationCap,
 };
 
+// O treinamento sai em traço pontilhado, de propósito: quem está ali não é o
+// responsável pelo posto, está aprendendo ao lado de quem já sabe.
 export const ROLE_BADGE_CLASSES: Record<ScheduleRole, string> = {
   fotografia: "bg-amber-500/10 text-amber-500 border-amber-500/20",
   filmmaker: "bg-blue-500/10 text-blue-500 border-blue-500/20",
   projecao: "bg-green-500/10 text-green-500 border-green-500/20",
   transmissao: "bg-purple-500/10 text-purple-500 border-purple-500/20",
+  treinamento: "bg-muted text-muted-foreground border-dashed border-muted-foreground/40",
 };
 
 export function formatScheduleDate(dateStr: string): string {
@@ -58,17 +66,9 @@ export function formatMonthLabel(month: string): string {
 }
 
 // ── Períodos do dia ─────────────────────────────────────────────────────────
-
-// Períodos que um culto pode ocupar — "dia" só existe do lado da indisponibilidade
-const EVENT_PERIODS: UnavailabilityPeriod[] = ["manha", "tarde", "noite"];
-
-// Horário do culto ("HH:mm") → período, para casar com a indisponibilidade
-export function periodOfTime(time: string): UnavailabilityPeriod {
-  const hour = Number(time.slice(0, 2));
-  if (hour < 12) return "manha";
-  if (hour < 18) return "tarde";
-  return "noite";
-}
+// `periodOfTime` mora no shared: o servidor também precisa dele para conferir a
+// regra do treinamento.
+export { periodOfTime } from "@shared/schema";
 
 // "dia" bloqueia qualquer culto; os demais, só o período correspondente
 export function blocksPeriod(entry: UnavailabilityPeriod, event: UnavailabilityPeriod): boolean {
@@ -82,6 +82,49 @@ export const UNAVAILABLE_NOTE: Record<UnavailabilityPeriod, string> = {
   noite: "indisponível à noite",
   dia: "indisponível neste dia",
 };
+
+// ── Treinamento ─────────────────────────────────────────────────────────────
+
+// Quem já está escalado num período, separado entre o treinamento e as demais
+// funções. Serve para o formulário barrar a escolha proibida na hora, em vez de
+// deixar o admin salvar e receber o erro da API.
+export interface PeriodRoster {
+  training: Set<number>;
+  working: Set<number>;
+}
+
+// Escalações de um período de um dia. Domingo de manhã e domingo à noite têm
+// balanços separados — treinar num não tira a pessoa do outro.
+// `ignoreScheduleId` tira a escala em edição: o que vale nela é o que está na
+// tela agora, não o que está salvo.
+export function rosterOfPeriod(
+  schedules: Schedule[],
+  date: string,
+  period: UnavailabilityPeriod,
+  ignoreScheduleId?: number,
+): PeriodRoster {
+  const roster: PeriodRoster = { training: new Set(), working: new Set() };
+  for (const schedule of schedules) {
+    if (schedule.eventDate !== date || schedule.id === ignoreScheduleId) continue;
+    if (periodOfTime(schedule.eventTime) !== period) continue;
+    for (const assignment of schedule.assignments) {
+      const target = isTrainingRole(assignment.role) ? roster.training : roster.working;
+      target.add(assignment.volunteerId);
+    }
+  }
+  return roster;
+}
+
+// Por que aquele voluntário não pode ser escolhido nesta função, se for o caso
+export const TRAINING_BLOCK_NOTE = "já escalado em outra função neste período";
+export const WORKING_BLOCK_NOTE = "em treinamento neste período";
+
+export function blockedNote(role: ScheduleRole, volunteerId: number, roster: PeriodRoster): string | null {
+  if (isTrainingRole(role)) {
+    return roster.working.has(volunteerId) ? TRAINING_BLOCK_NOTE : null;
+  }
+  return roster.training.has(volunteerId) ? WORKING_BLOCK_NOTE : null;
+}
 
 // ── Sobrecarga de voluntários ───────────────────────────────────────────────
 
@@ -161,9 +204,11 @@ export const DEFAULT_MORNING_TIME = "10:00";
 
 let slotSeq = 0;
 
+// O treinamento fica de fora por padrão: é uma vaga ocasional, marcada à mão
+// quando alguém vai acompanhar a equipe naquele culto.
 export function makeScheduleSlot(
   time: string = DEFAULT_SCHEDULE_TIME,
-  roles: ScheduleRole[] = [...SCHEDULE_ROLES],
+  roles: ScheduleRole[] = [...OPERATIONAL_ROLES],
 ): ScheduleSlot {
   slotSeq += 1;
   return { id: `slot-${slotSeq}`, time, roles };
@@ -212,7 +257,8 @@ export interface AutoGenerateResult {
 // skipping volunteers who registered unavailability for the period of that
 // service (a "dia" entry blocks every service of the day, "manha"/"tarde"/
 // "noite" only the matching one) and avoiding assigning the same person twice
-// in the same event when possible.
+// in the same event when possible. Quem cai no treinamento fica fora das demais
+// funções daquele período, e vice-versa.
 export function autoGenerateSchedules(opts: {
   volunteers: SafeUser[];
   existing: Schedule[];
@@ -245,6 +291,20 @@ export function autoGenerateSchedules(opts: {
   const generated: InsertSchedule[] = [];
   const skipped: AutoGenerateResult["skipped"] = [];
 
+  // Treinamento e função operacional se excluem dentro do período, então o
+  // balanço é por data+período e já começa com o que estava salvo. O culto da
+  // noite tem o seu próprio: treinar de manhã não tira ninguém dele.
+  const rosterByPeriod = new Map<string, PeriodRoster>();
+  const rosterOn = (date: string, period: UnavailabilityPeriod): PeriodRoster => {
+    const key = `${date}:${period}`;
+    let roster = rosterByPeriod.get(key);
+    if (!roster) {
+      roster = rosterOfPeriod(existing, date, period);
+      rosterByPeriod.set(key, roster);
+    }
+    return roster;
+  };
+
   for (const { date, roles, time } of dates) {
     if (scheduledSlots.has(`${date} ${time}`)) {
       skipped.push({ date, time });
@@ -253,12 +313,20 @@ export function autoGenerateSchedules(opts: {
     scheduledSlots.add(`${date} ${time}`);
 
     const eventPeriod = periodOfTime(time);
+    const roster = rosterOn(date, eventPeriod);
     const assignments: ScheduleAssignment[] = [];
     const usedInEvent = new Set<number>();
 
+    // O treinamento é preenchido por último (é o fim de SCHEDULE_ROLES), então
+    // as funções do culto escolhem primeiro e sobra para o aprendiz quem não
+    // está cobrindo posto nenhum naquele período.
     for (const role of SCHEDULE_ROLES.filter((r) => roles.includes(r))) {
       const eligible = eligibleVolunteers
-        .filter((v) => v.roles.includes(role) && !unavailableOn.has(`${v.id}:${date}:${eventPeriod}`))
+        .filter((v) =>
+          v.roles.includes(role) &&
+          !unavailableOn.has(`${v.id}:${date}:${eventPeriod}`) &&
+          !blockedNote(role, v.id, roster)
+        )
         .sort((a, b) => {
           const diff = (load.get(a.id) ?? 0) - (load.get(b.id) ?? 0);
           return diff !== 0 ? diff : a.displayName.localeCompare(b.displayName);
@@ -269,6 +337,7 @@ export function autoGenerateSchedules(opts: {
       assignments.push({ role, volunteerId: pick.id, volunteerName: pick.displayName });
       load.set(pick.id, (load.get(pick.id) ?? 0) + 1);
       usedInEvent.add(pick.id);
+      (isTrainingRole(role) ? roster.training : roster.working).add(pick.id);
     }
 
     generated.push({

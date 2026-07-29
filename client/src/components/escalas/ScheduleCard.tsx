@@ -3,7 +3,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Clock, Pencil, Trash2 } from "lucide-react";
-import { SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, type Schedule } from "@shared/schema";
+import { isTrainingRole, SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, type Schedule } from "@shared/schema";
 import {
   formatScheduleDate, monthlyLoadOf, ROLE_BADGE_CLASSES, ROLE_ICONS,
   scheduleMonth, OVERLOAD_THRESHOLD, type MonthlyLoad,
@@ -58,6 +58,9 @@ export function ScheduleCard({ schedule, highlightVolunteerId, monthlyLoad, onEd
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {SCHEDULE_ROLES.map((role) => {
           const assignment = schedule.assignments.find((a) => a.role === role);
+          // As funções do culto aparecem sempre, mesmo vazias — é o que falta
+          // preencher. O treinamento é vaga ocasional: sem aprendiz, nem aparece.
+          if (!assignment && isTrainingRole(role)) return null;
           const Icon = ROLE_ICONS[role];
           const isMine = assignment && highlightVolunteerId != null && assignment.volunteerId === highlightVolunteerId;
           const monthCount = assignment && monthlyLoad

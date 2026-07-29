@@ -2,8 +2,10 @@ import { pgTable, text, varchar, integer, timestamp, boolean, jsonb } from "driz
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-// The four functions of the media ministry (escalas)
-export const SCHEDULE_ROLES = ["fotografia", "filmmaker", "projecao", "transmissao"] as const;
+// As funções do ministério de comunicação (escalas). "treinamento" não é um
+// posto de trabalho: é a vaga de quem vai acompanhar a equipe para aprender uma
+// função que ainda não exerce.
+export const SCHEDULE_ROLES = ["fotografia", "filmmaker", "projecao", "transmissao", "treinamento"] as const;
 export type ScheduleRole = (typeof SCHEDULE_ROLES)[number];
 
 export const SCHEDULE_ROLE_LABELS: Record<ScheduleRole, string> = {
@@ -11,7 +13,17 @@ export const SCHEDULE_ROLE_LABELS: Record<ScheduleRole, string> = {
   filmmaker: "Filmmaker",
   projecao: "Projeção",
   transmissao: "Transmissão ao Vivo",
+  treinamento: "Em treinamento",
 };
+
+export const TRAINING_ROLE: ScheduleRole = "treinamento";
+
+// As funções que de fato cobrem o culto — tudo menos o treinamento
+export const OPERATIONAL_ROLES: ScheduleRole[] = SCHEDULE_ROLES.filter((r) => r !== TRAINING_ROLE);
+
+export function isTrainingRole(role: ScheduleRole): boolean {
+  return role === TRAINING_ROLE;
+}
 
 // Team members (communication team). `roles` marks the functions the
 // user can serve in — users with at least one role are the volunteers.
@@ -242,6 +254,17 @@ export function unavailabilityPeriod(period?: string | null): UnavailabilityPeri
     : "dia";
 }
 
+// Períodos que um culto pode ocupar — "dia" só existe do lado da indisponibilidade
+export const EVENT_PERIODS: UnavailabilityPeriod[] = ["manha", "tarde", "noite"];
+
+// Horário do culto ("HH:mm") → período do dia
+export function periodOfTime(time: string): UnavailabilityPeriod {
+  const hour = Number(time.slice(0, 2));
+  if (hour < 12) return "manha";
+  if (hour < 18) return "tarde";
+  return "noite";
+}
+
 // Days a volunteer cannot serve — used by auto-generation and shown to admins
 export const unavailability = pgTable("unavailability", {
   id: integer("id").primaryKey(),
@@ -259,6 +282,52 @@ export const insertUnavailabilitySchema = createInsertSchema(unavailability, {
 });
 export type InsertUnavailability = z.infer<typeof insertUnavailabilitySchema>;
 export type Unavailability = typeof unavailability.$inferSelect;
+
+// ── Treinamento ──
+// Quem está escalado em treinamento não assume nenhuma outra função no mesmo
+// período: a pessoa está ali para aprender, acompanhando quem já sabe, e não
+// pode ser contada como responsável por um posto ao mesmo tempo. O bloqueio vale
+// só para o período do treinamento — quem treina no culto da manhã continua
+// livre para servir à tarde ou à noite do mesmo dia.
+
+// O que a regra precisa de uma escala: o horário (de onde sai o período) e quem
+// está escalado. Serve tanto para a escala salva quanto para a que está sendo
+// criada.
+export interface ScheduledEvent {
+  eventTime: string;
+  assignments: ScheduleAssignment[];
+}
+
+// Nomes dos voluntários que estão em treinamento e em outra função no mesmo
+// período. Recebe os eventos de um único dia — os dois cultos de domingo são
+// avaliados separadamente, cada um no seu período.
+export function trainingConflicts(events: ScheduledEvent[]): string[] {
+  const trainees = new Map<string, { id: number; name: string }>();
+  const working = new Set<string>();
+  for (const event of events) {
+    const period = periodOfTime(event.eventTime);
+    for (const a of event.assignments) {
+      const key = `${period}:${a.volunteerId}`;
+      if (isTrainingRole(a.role)) trainees.set(key, { id: a.volunteerId, name: a.volunteerName });
+      else working.add(key);
+    }
+  }
+  // Um mesmo voluntário em conflito em dois períodos aparece uma vez só
+  const conflicted = new Map<number, string>();
+  trainees.forEach((trainee, key) => {
+    if (working.has(key)) conflicted.set(trainee.id, trainee.name);
+  });
+  return Array.from(conflicted.values());
+}
+
+// Mensagem única para o aviso do formulário e o erro da API
+export function trainingConflictMessage(names: string[]): string | null {
+  if (names.length === 0) return null;
+  const list = names.join(", ");
+  return names.length === 1
+    ? `${list} está em treinamento e não pode assumir outra função no mesmo período.`
+    : `${list} estão em treinamento e não podem assumir outra função no mesmo período.`;
+}
 
 // ── Auditoria ──
 // Registro append-only do que aconteceu com contas e acessos. Não é log de

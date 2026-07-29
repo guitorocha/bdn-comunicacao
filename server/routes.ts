@@ -1,7 +1,7 @@
 import type { Express, Request as ExpressRequest, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isLocked, isRootAdmin, passwordIssue, MAX_FAILED_LOGINS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, UNAVAILABILITY_PERIODS, type User } from "@shared/schema";
+import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isLocked, isRootAdmin, passwordIssue, trainingConflictMessage, trainingConflicts, MAX_FAILED_LOGINS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, UNAVAILABILITY_PERIODS, type InsertSchedule, type Schedule, type User } from "@shared/schema";
 import { z } from "zod";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { recordAudit } from "./audit";
@@ -622,6 +622,16 @@ export async function registerRoutes(
 
   // ── Schedules (escalas) ──
 
+  // Quem está em treinamento não pode assumir outra função no mesmo período. A
+  // checagem junta as escalas do mesmo dia porque duas escalas diferentes podem
+  // cair no mesmo período (dois horários numa manhã, por exemplo) — o agrupamento
+  // por período fica com `trainingConflicts`. Por isso `others` traz as demais
+  // escalas já salvas e, no bulk, também as que estão sendo criadas no lote.
+  const trainingIssue = (data: InsertSchedule, others: (Schedule | InsertSchedule)[]): string | null => {
+    const sameDay = others.filter((s) => s.eventDate === data.eventDate);
+    return trainingConflictMessage(trainingConflicts([...sameDay, data]));
+  };
+
   // Only logged-in users can see schedules
   app.get("/api/schedules", requireUser, async (_req, res) => {
     const all = await storage.getAllSchedules();
@@ -632,6 +642,8 @@ export async function registerRoutes(
   app.post("/api/schedules", requireAdmin, async (req, res) => {
     try {
       const data = insertScheduleSchema.parse(req.body);
+      const issue = trainingIssue(data, await storage.getAllSchedules());
+      if (issue) return res.status(400).json({ message: issue });
       const schedule = await storage.createSchedule(data);
       return res.status(201).json(schedule);
     } catch (err) {
@@ -646,8 +658,11 @@ export async function registerRoutes(
   app.post("/api/schedules/bulk", requireAdmin, async (req, res) => {
     try {
       const data = z.array(insertScheduleSchema).min(1).parse(req.body?.schedules);
+      const existing = await storage.getAllSchedules();
       const created = [];
       for (const item of data) {
+        const issue = trainingIssue(item, [...existing, ...created]);
+        if (issue) return res.status(400).json({ message: issue });
         created.push(await storage.createSchedule(item));
       }
       return res.status(201).json(created);
@@ -664,6 +679,10 @@ export async function registerRoutes(
     if (isNaN(id)) return res.status(400).json({ message: "ID inválido" });
     try {
       const data = insertScheduleSchema.parse(req.body);
+      // A própria escala sai da conta: quem já está nela é o que está sendo trocado
+      const others = (await storage.getAllSchedules()).filter((s) => s.id !== id);
+      const issue = trainingIssue(data, others);
+      if (issue) return res.status(400).json({ message: issue });
       const updated = await storage.updateSchedule(id, data);
       if (!updated) return res.status(404).json({ message: "Escala não encontrada" });
       return res.json(updated);

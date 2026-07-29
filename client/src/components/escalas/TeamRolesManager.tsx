@@ -63,6 +63,8 @@ export function TeamRolesManager({ users, unavailability, monthlyLoad }: TeamRol
       </div>
       <p className="text-xs text-muted-foreground">
         Marque as funções que cada membro pode exercer. Somente membros com função entram nas escalas.
+        Marque <span className="font-medium">Em treinamento</span> em quem ainda está aprendendo: essa
+        pessoa pode ser escalada para acompanhar a equipe e, no período do treino, não assume outra função.
       </p>
 
       <Separator />
