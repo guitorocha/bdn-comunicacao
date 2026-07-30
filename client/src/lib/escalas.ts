@@ -180,11 +180,14 @@ export function overloadedMonths(
   return months.sort((a, b) => a.month.localeCompare(b.month));
 }
 
-// A date to generate, with the functions that should be filled on it
+// A date to generate, with the functions that should be filled on it. O título
+// viaja junto porque é do dia da semana: quinta pode ser "Culto de oração" e
+// sábado "Culto jovem" na mesma geração.
 export interface ScheduleDate {
   date: string;
   roles: ScheduleRole[];
   time: string;
+  title: string;
 }
 
 // One service inside a weekday: its time and the functions to be filled.
@@ -195,12 +198,34 @@ export interface ScheduleSlot {
   roles: ScheduleRole[];
 }
 
+// O que foi configurado para um dia da semana: os horários que valem para toda
+// data dele, as datas do período que não terão culto e as datas com horários
+// próprios. Nem todo sábado do mês tem evento, e nos que têm o horário pode
+// mudar de semana para semana — o dia da semana é o molde, a data é o fato.
+//
+// As exceções moram dentro do dia da semana de propósito: desmarcar o dia apaga
+// as dele junto, sem varredura por data.
+export interface WeekdayPlan {
+  // Título das escalas deste dia — cada dia tem o nome do seu culto
+  title: string;
+  slots: ScheduleSlot[];
+  // Datas ISO que não geram escala. Não confundir com `AutoGenerateResult.skipped`,
+  // que é data+horário pulado por já ter escala salva.
+  excludedDates: string[];
+  // Horários próprios de uma data, no lugar de `slots`
+  slotsByDate: Record<string, ScheduleSlot[]>;
+  // Nome próprio de uma data, no lugar de `title`. O evento de sábado costuma ter
+  // nome por edição ("Culto jovem — Verão"), e isso é da data, não do dia da semana.
+  titleByDate: Record<string, string>;
+}
+
 // Services selected per weekday (0=domingo ... 6=sábado). A weekday absent, or
 // whose slots have no roles, is not generated.
-export type SlotsByWeekday = Record<number, ScheduleSlot[]>;
+export type PlanByWeekday = Record<number, WeekdayPlan>;
 
 export const DEFAULT_SCHEDULE_TIME = "18:00";
 export const DEFAULT_MORNING_TIME = "10:00";
+export const DEFAULT_SCHEDULE_TITLE = "Culto";
 
 let slotSeq = 0;
 
@@ -221,28 +246,58 @@ export function defaultSlotsForWeekday(weekday: number): ScheduleSlot[] {
     : [makeScheduleSlot()];
 }
 
+// Um dia da semana recém-marcado: título e horários padrão, nenhuma data
+// excluída, nenhum horário próprio
+export function defaultPlanForWeekday(weekday: number): WeekdayPlan {
+  return {
+    title: DEFAULT_SCHEDULE_TITLE,
+    slots: defaultSlotsForWeekday(weekday),
+    excludedDates: [],
+    slotsByDate: {},
+    titleByDate: {},
+  };
+}
+
+// Datas do período que caem no dia da semana pedido, em ordem. A UI lista essas
+// datas e a geração percorre as mesmas: a chave é sempre a string ISO local,
+// então exclusão e horário próprio casam por construção.
+export function datesInPeriod(start: Date, weeks: number, weekday: number): string[] {
+  const dates: string[] = [];
+  for (let i = 0; i < weeks * 7; i++) {
+    const d = addDays(start, i);
+    if (d.getDay() === weekday) dates.push(format(d, "yyyy-MM-dd"));
+  }
+  return dates;
+}
+
 // All dates matching the selected weekdays within `weeks` weeks starting from
-// `start`, one entry per service of that weekday (earliest time first)
+// `start`, one entry per service of that date. Datas excluídas não chegam aqui,
+// e uma data com horários próprios usa os dela em vez dos do dia da semana.
 export function datesForWeekdays(
   start: Date,
   weeks: number,
-  slotsByWeekday: SlotsByWeekday,
+  plans: PlanByWeekday,
 ): ScheduleDate[] {
   const dates: ScheduleDate[] = [];
-  for (let i = 0; i < weeks * 7; i++) {
-    const d = addDays(start, i);
-    const slots = slotsByWeekday[d.getDay()];
-    if (!slots) continue;
-    const date = format(d, "yyyy-MM-dd");
-    slots
-      .filter((slot) => slot.roles.length > 0)
-      .slice()
-      .sort((a, b) => a.time.localeCompare(b.time))
-      .forEach((slot) => {
-        dates.push({ date, roles: slot.roles, time: slot.time || DEFAULT_SCHEDULE_TIME });
-      });
+  for (const [weekday, plan] of Object.entries(plans)) {
+    const excluded = new Set(plan.excludedDates);
+    const weekdayTitle = plan.title.trim() || DEFAULT_SCHEDULE_TITLE;
+    for (const date of datesInPeriod(start, weeks, Number(weekday))) {
+      if (excluded.has(date)) continue;
+      // Nome próprio da data ganha do nome do dia da semana; em branco, herda
+      const title = plan.titleByDate[date]?.trim() || weekdayTitle;
+      (plan.slotsByDate[date] ?? plan.slots)
+        .filter((slot) => slot.roles.length > 0)
+        .forEach((slot) => {
+          dates.push({ date, roles: slot.roles, time: slot.time || DEFAULT_SCHEDULE_TIME, title });
+        });
+    }
   }
-  return dates;
+  // Percorrer por dia da semana embaralhou o calendário, e a ordem cronológica é
+  // regra: o rodízio distribui na ordem em que percorre as datas, então iterar
+  // "todos os sábados, depois todos os domingos" daria uma escala diferente — e
+  // impossível de justificar para a equipe.
+  return dates.sort((a, b) => `${a.date} ${a.time}`.localeCompare(`${b.date} ${b.time}`));
 }
 
 export interface AutoGenerateResult {
@@ -264,9 +319,8 @@ export function autoGenerateSchedules(opts: {
   existing: Schedule[];
   unavailability: Unavailability[];
   dates: ScheduleDate[];
-  title: string;
 }): AutoGenerateResult {
-  const { volunteers, existing, unavailability, dates, title } = opts;
+  const { volunteers, existing, unavailability, dates } = opts;
 
   const load = new Map<number, number>();
   const eligibleVolunteers = volunteers.filter((v) => v.roles.length > 0);
@@ -305,7 +359,7 @@ export function autoGenerateSchedules(opts: {
     return roster;
   };
 
-  for (const { date, roles, time } of dates) {
+  for (const { date, roles, time, title } of dates) {
     if (scheduledSlots.has(`${date} ${time}`)) {
       skipped.push({ date, time });
       continue;

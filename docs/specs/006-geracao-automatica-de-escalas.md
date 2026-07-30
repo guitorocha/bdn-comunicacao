@@ -21,6 +21,11 @@ indisponibilidades e a regra de treinamento, com **prévia revisável antes de s
 - Peso por função (transmissão não "vale mais" que fotografia).
 - Reprocessamento automático quando alguém registra indisponibilidade depois da geração.
 - Geração agendada/recorrente sem intervenção humana.
+- **Calendário de cultos persistido.** As datas sem culto e os horários próprios valem para
+  aquela geração e morrem com o diálogo (RF-GER-021) — não há entidade "data sem culto" nem
+  tabela nova. Se um dia isso virar um calendário de verdade, o modelo a imitar é a
+  indisponibilidade ([005](005-escalas-de-voluntarios.md)), que atravessa `IStorage`, as duas
+  implementações e o Terraform.
 
 ## Histórias de usuário
 
@@ -38,11 +43,21 @@ pulado e as funções que ficaram sem ninguém.
 
 **HU-5.** Como administrador, quero que domingo já venha com os dois cultos (manhã e noite).
 
+**HU-6.** Como administrador, quero desmarcar as datas sem culto e ajustar o horário de datas
+específicas antes de gerar — nem todo sábado do mês tem evento, e nos que têm o horário muda
+de semana para semana.
+
+**HU-7.** Como administrador, quero dar um título a cada dia da semana, porque quinta e sábado
+não são o mesmo culto e a escala precisa dizer qual é.
+
+**HU-8.** Como administrador, quero nomear datas específicas na hora de gerar — o evento de
+sábado costuma ter um nome por edição, e digitar isso depois em cada escala é retrabalho.
+
 ## Requisitos
 
 | ID | Requisito | Origem |
 |---|---|---|
-| RF-GER-001 | O admin DEVE informar data inicial, número de semanas, dias da semana e, por dia, um ou mais cultos (horário + funções) | HU-1 |
+| RF-GER-001 | O admin DEVE informar data inicial, número de semanas, dias da semana e, por dia, um título e um ou mais cultos (horário + funções) | HU-1 |
 | RF-GER-002 | Domingo, ao ser marcado, DEVE vir com dois cultos padrão: 10:00 e 18:00 | HU-5 |
 | RF-GER-003 | Os demais dias DEVEM vir com um culto padrão às 18:00 | HU-1 |
 | RF-GER-004 | Os cultos padrão DEVEM trazer marcadas apenas as funções operacionais (sem treinamento) | HU-1 |
@@ -57,7 +72,19 @@ pulado e as funções que ficaram sem ninguém.
 | RF-GER-013 | Uma função sem voluntário elegível DEVE ficar **vazia**, sem impedir a geração das demais | HU-4 |
 | RF-GER-014 | A prévia DEVE ser recalculada a cada mudança de parâmetro, antes de qualquer gravação | HU-4 |
 | RF-GER-015 | A gravação DEVE acontecer só na confirmação, via `POST /api/schedules/bulk` | HU-4 |
-| RF-GER-016 | As escalas geradas DEVEM ter `eventType = "culto"`, título informado (padrão "Culto") e `notes = null` | HU-1 |
+| RF-GER-016 | As escalas geradas DEVEM ter `eventType = "culto"`, o título do seu dia da semana e `notes = null` | HU-1 |
+| RF-GER-017 | Cada dia da semana marcado DEVE listar as datas concretas do período, todas marcadas por padrão | HU-6 |
+| RF-GER-018 | Data desmarcada NÃO DEVE gerar escala, em nenhum dos horários daquele dia | HU-6 |
+| RF-GER-019 | Uma data PODE ter horários próprios, herdados do padrão do dia na primeira edição, com opção de restaurar o padrão | HU-6 |
+| RF-GER-020 | As funções de uma data DEVEM ser as do horário padrão do dia da semana — a data ajusta horário e nome, não funções | HU-6 |
+| RF-GER-021 | Datas desmarcadas e horários próprios DEVEM ser estado do formulário, descartados ao fechar o diálogo | HU-6 |
+| RF-GER-022 | Cada dia da semana DEVE ter o seu próprio título, com padrão "Culto" | HU-7 |
+| RF-GER-023 | Título em branco DEVE cair no padrão "Culto", não gerar escala sem título | HU-7 |
+| RF-GER-024 | A prévia DEVE mostrar o título de cada escala, já que ele varia dentro do mesmo lote | HU-7, HU-4 |
+| RF-GER-025 | A lista de datas DEVE começar recolhida, com o resumo das exceções visível mesmo recolhida | HU-6 |
+| RF-GER-026 | A lista DEVE abrir sozinha quando o dia já tiver data desmarcada, nome próprio ou horário próprio na janela vigente | HU-6 |
+| RF-GER-027 | Uma data PODE ter nome próprio, opcional, que substitui o título do dia da semana | HU-8 |
+| RF-GER-028 | Nome próprio em branco DEVE herdar o título do dia, e o campo DEVE mostrar esse título como `placeholder` | HU-8 |
 
 ## Regras de negócio
 
@@ -105,10 +132,53 @@ gente seria pior.
 O índice `unavailableOn` expande `"dia"` em `manha`/`tarde`/`noite`.
 **Por quê:** a comparação passa a ser sempre por período, sem caso especial no laço quente.
 
+### RN-8 — A data ganha do dia da semana
+`WeekdayPlan` guarda o molde (`slots`) e as exceções: `plan.slotsByDate[date] ?? plan.slots`,
+e `excludedDates` vence os dois.
+**Por quê:** o dia da semana é o molde, a data é o fato. Sábado tem culto "às 18:00" só até o
+sábado em que não tem culto nenhum, ou em que o culto é às 19:30.
+**Consequências que você precisa conhecer:** as exceções moram **dentro** do dia da semana,
+então desmarcar o dia descarta as dele junto — de propósito, para não guardar exclusão órfã de
+um dia que não gera mais nada. E exceção de data fora da janela vigente é ignorada, não
+apagada: mudar "A partir de" e voltar traz a exclusão de volta. Por isso o resumo do bloco de
+datas conta só o que está **na janela** — badge que fala de data fora do período seria mentira.
+
+### RN-11 — Exceção nunca fica escondida
+A lista de datas começa recolhida (oito domingos com dois horários cada é lista demais para
+quem só quer gerar o mês), mas o resumo — "7 de 8", "1 com horário próprio" — fica no próprio
+botão que recolhe, e a lista abre sozinha se o dia já tiver exceção.
+**Por quê:** recolher é economia de tela, não de informação. O admin não pode salvar 30
+escalas sem perceber que um sábado ficou de fora dentro de um bloco fechado.
+
+### RN-9 — A ordem cronológica é regra
+`datesForWeekdays` percorre dia da semana por dia da semana e **reordena** por data + horário
+antes de devolver.
+**Por quê:** o rodízio distribui na ordem em que percorre `dates` (RN-2). Entregar "todos os
+sábados, depois todos os domingos" geraria uma escala diferente e impossível de justificar
+para a equipe.
+
+### RN-10 — O título tem três níveis, resolvidos na montagem de `dates`
+```
+titleByDate[data] (sem espaços)  →  plan.title (sem espaços)  →  DEFAULT_SCHEDULE_TITLE
+```
+`autoGenerateSchedules` **não** recebe mais um título de lote: cada escala usa o título que
+veio na sua data, já resolvido por `datesForWeekdays` — não no laço do rodízio.
+**Por quê:** são três perguntas diferentes. Quinta e sábado não são o mesmo culto (nível do
+dia da semana), e o evento de sábado costuma ter nome por edição — "Culto jovem — Verão" é
+daquele sábado, não de todos (nível da data). O padrão existe para que nenhuma escala seja
+gravada sem título.
+**Consequências que você precisa conhecer:** o nome por data é **opcional** e não tem botão de
+restaurar — apagar o campo já é o restaurar, e o `placeholder` mostra o que será herdado. Por
+isso o valor em branco **não** é guardado em `titleByDate`: se fosse, "nome próprio vazio"
+viraria um estado indistinguível de "sem nome próprio". E a prévia mostra o título de cada
+escala (RF-GER-024); sem isso o admin não tem como conferir o que vai ser gravado.
+
 ## Algoritmo
 
 ```
-entrada: volunteers[], existing[], unavailability[], dates[], title
+entrada: volunteers[], existing[], unavailability[], dates[]
+         # cada item de dates[] traz data, horário, funções e título
+         # dates[] já vem sem as datas desmarcadas e com o horário próprio de cada uma
 
 1. elegíveis   ← volunteers com roles.length > 0
 2. load        ← 0 para cada elegível, + 1 por escalação existente
@@ -183,6 +253,51 @@ e função operacional se excluem dentro do período.
 - **Quando** gerar um culto com as duas funções
 - **Então** o sistema evita usar a mesma pessoa nas duas, se houver alternativa
 
+**CA-9** (RF-GER-017, RF-GER-018, RF-GER-019, RN-8)
+- **Dado** sábado marcado às 18:00 e os sábados 01/08, 08/08, 15/08 e 22/08 no período
+- **Quando** desmarcar 08/08 e pôr 19:30 em 15/08
+- **Então** são geradas 3 escalas — 01/08 e 22/08 às 18:00 e 15/08 às 19:30 — e nenhuma em
+  08/08
+- **E quando** trocar o horário padrão do sábado para 17:00
+- **Então** 01/08 e 22/08 passam a 17:00 e 15/08 continua às 19:30, até que se restaure o
+  padrão dela
+
+**CA-10** (RF-GER-022, RF-GER-023, RF-GER-024)
+- **Dado** sábado com título "Culto jovem", domingo com "Culto" e quinta com o título em branco
+- **Quando** gerar as duas semanas seguintes
+- **Então** cada escala é gravada com o título do seu dia, as de quinta com "Culto", e a prévia
+  mostra o título de cada uma
+
+**CA-11** (RF-GER-025, RF-GER-026)
+- **Dado** domingo marcado num período de 8 semanas
+- **Quando** o card abrir
+- **Então** "Datas no período" está recolhido, mostrando "8 datas"
+- **E quando** desmarcar 16/08 e pôr horário próprio em 23/08
+- **Então** o resumo passa a "7 de 8" e "1 com horário próprio", e continua visível depois de
+  recolher a lista
+
+## Interface
+
+O diálogo tem três níveis, do mais geral para o mais específico:
+
+| Nível | Onde | O que define |
+|---|---|---|
+| Lote | topo do diálogo | data inicial e número de semanas |
+| Dia da semana | card do dia | título padrão, horários e funções |
+| Data | linha em "Datas no período" | gerar ou não, nome próprio, horários próprios |
+
+O nível da data só **sobrescreve** o do dia da semana, nunca o contrário, e sempre de forma
+opcional — por isso o card do dia continua sendo suficiente para quem só quer gerar o mês
+inteiro sem exceção nenhuma. Funções são o único atributo que **não** desce para a data: a
+data ajusta *quando* e *como se chama*, não *quem entra*.
+
+**CA-12** (RF-GER-027, RF-GER-028, RN-10)
+- **Dado** sábado com título "Culto jovem" e os sábados 01/08, 15/08 e 22/08 gerando
+- **Quando** escrever "Culto jovem — Verão" apenas em 15/08
+- **Então** 15/08 é gravado com "Culto jovem — Verão" e 01/08 e 22/08 com "Culto jovem"
+- **E quando** apagar o nome de 15/08
+- **Então** ele volta a "Culto jovem", sem precisar de botão de restaurar
+
 ## Contrato
 
 `POST /api/schedules/bulk` 🛡️ —
@@ -195,13 +310,16 @@ e função operacional se excluem dentro do período.
 
 | Camada | Arquivo | Símbolo |
 |---|---|---|
-| Algoritmo | [`client/src/lib/escalas.ts`](../../client/src/lib/escalas.ts) | `autoGenerateSchedules`, `datesForWeekdays`, `defaultSlotsForWeekday`, `makeScheduleSlot`, `rosterOfPeriod`, `blockedNote` |
+| Algoritmo | [`client/src/lib/escalas.ts`](../../client/src/lib/escalas.ts) | `autoGenerateSchedules`, `datesForWeekdays`, `datesInPeriod`, `defaultPlanForWeekday`, `defaultSlotsForWeekday`, `makeScheduleSlot`, `rosterOfPeriod`, `blockedNote` |
+| Configuração | [`client/src/lib/escalas.ts`](../../client/src/lib/escalas.ts) | `WeekdayPlan`, `PlanByWeekday`, `ScheduleSlot`, `ScheduleDate`, `DEFAULT_SCHEDULE_TITLE` |
 | Regra compartilhada | [`shared/schema.ts`](../../shared/schema.ts) | `SCHEDULE_ROLES` (ordem!), `periodOfTime`, `EVENT_PERIODS`, `trainingConflicts` |
-| UI | [`client/src/components/escalas/AutoGenerateDialog.tsx`](../../client/src/components/escalas/AutoGenerateDialog.tsx) | `AutoGenerateDialog`, `MAIN_WEEKDAY_OPTIONS`, `OTHER_WEEKDAY_OPTIONS` |
+| UI | [`client/src/components/escalas/AutoGenerateDialog.tsx`](../../client/src/components/escalas/AutoGenerateDialog.tsx) | `AutoGenerateDialog`, `WeekdayCard`, `WeekdayDateRow`, `MAIN_WEEKDAY_OPTIONS`, `OTHER_WEEKDAY_OPTIONS` |
 | API | [`server/routes.ts`](../../server/routes.ts) | `POST /api/schedules/bulk`, `trainingIssue` |
 
 Dias de culto: domingo, quinta e sábado ficam visíveis; segunda, terça, quarta e sexta ficam
-atrás de "Outros dias" — raramente usados, mas disponíveis para eventos ocasionais.
+atrás de "Outros dias" — raramente usados, mas disponíveis para eventos ocasionais. A lista de
+datas aparece em **todos** eles, inclusive domingo e quinta: feriado ou evento da igreja também
+cancela um domingo.
 
 ## Dívidas e lacunas
 
