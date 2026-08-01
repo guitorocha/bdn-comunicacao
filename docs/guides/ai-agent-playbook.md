@@ -25,6 +25,7 @@ silenciosa.
 | Mudar comportamento de funcionalidade | spec correspondente → `shared/schema.ts` → `server/routes.ts` → a página/componente |
 | Mexer em auth, sessão, senha, permissão | [`../architecture/security.md`](../architecture/security.md) → [spec 003](../specs/003-autenticacao-e-contas.md) → ADRs [0003](../decisions/ADR-0003-sessao-jwt-em-cookie-httponly.md), [0004](../decisions/ADR-0004-bloqueio-permanente-de-conta.md), [0005](../decisions/ADR-0005-conta-raiz-admin.md) |
 | Mexer em escalas | [spec 005](../specs/005-escalas-de-voluntarios.md) → [spec 006](../specs/006-geracao-automatica-de-escalas.md) → [ADR-0006](../decisions/ADR-0006-treinamento-como-funcao-de-escala.md) → `client/src/lib/escalas.ts` |
+| Mexer em lembretes/notificação | [spec 008](../specs/008-lembretes-de-escala.md) → [ADR-0008](../decisions/ADR-0008-web-push-para-lembretes.md) → `server/lembretes.ts` → `server/push.ts` |
 | Mexer em dados/persistência | [`../architecture/data-model.md`](../architecture/data-model.md) → [ADR-0001](../decisions/ADR-0001-dynamodb-como-persistencia.md) → [ADR-0002](../decisions/ADR-0002-drizzle-como-fonte-de-tipos.md) |
 | Mexer em API | [`../architecture/api-contract.md`](../architecture/api-contract.md) |
 | Mexer em infra/deploy | [`../architecture/infrastructure.md`](../architecture/infrastructure.md) → [`deployment.md`](deployment.md) → [ADR-0007](../decisions/ADR-0007-serverless-cloudfront-lambda.md) |
@@ -39,11 +40,17 @@ DynamoDB**. Não escreva migração, não sugira `db:push`, não conte com const
 ou índice de banco relacional. `.notNull()`, `.unique()` e `.default()` são **decorativos**.
 [ADR-0002](../decisions/ADR-0002-drizzle-como-fonte-de-tipos.md).
 
-### 2. Dois entrypoints de servidor
+### 2. Três entrypoints de servidor
 [`server/index.ts`](../../server/index.ts) (dev / `npm start`) e
 [`server/lambda.ts`](../../server/lambda.ts) (produção) montam **cada um o seu** app Express.
 Middleware adicionado só no primeiro **não existe em produção**. Adicione nos dois, ou mova
 para dentro de `registerRoutes`.
+
+E existe um **terceiro** entrypoint, que não é HTTP:
+[`server/lembretes-handler.ts`](../../server/lembretes-handler.ts), invocado pelo
+EventBridge Scheduler numa Lambda própria. Ele não passa por `registerRoutes` nem monta
+Express — middleware nenhum vale ali
+([spec 008](../specs/008-lembretes-de-escala.md)).
 
 ### 3. A ordem de `SCHEDULE_ROLES` é regra de negócio
 `treinamento` é o último **de propósito**: a geração automática itera nessa ordem e preenche
@@ -73,12 +80,13 @@ do mesmo arquivo. Esquecer a terceira produz `AccessDeniedException` só em prod
 ### 8. Dependência de runtime nova precisa entrar no allowlist do build
 [`script/build.ts`](../../script/build.ts) marca como *external* tudo que não está na
 allowlist — e o que é external **não vai no ZIP da Lambda**. O erro aparece só em produção.
+O ZIP leva **dois** bundles (backend e lembretes), consumidos por duas funções.
 
 ## Verificações antes de dizer "pronto"
 
 - [ ] `npm run check` passa (é o único portão automatizado que existe).
 - [ ] A regra vale no **servidor**, não só no formulário.
-- [ ] Nenhuma resposta expõe `password`.
+- [ ] Nenhuma resposta expõe `password` nem `pushSubscriptions` — use `toSafeUser`.
 - [ ] Nenhum corpo de request/resposta foi para log.
 - [ ] Se adicionou método de dados: entrou na `IStorage` **e** nas duas implementações.
 - [ ] Se adicionou rota: está documentada em

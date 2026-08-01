@@ -7,11 +7,12 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { PASSWORD_MIN_LENGTH, passwordIssue } from "@shared/schema";
+import { PASSWORD_MIN_LENGTH, normalizePhoneBR, passwordIssue } from "@shared/schema";
 import { KeyRound, Save, ShieldAlert, UserCog } from "lucide-react";
 import { Redirect } from "wouter";
 import { Navbar } from "@/components/Navbar";
 import { PerplexityAttribution } from "@/components/PerplexityAttribution";
+import { LembretesCard } from "@/components/escalas/LembretesCard";
 
 export default function UsuariosPage() {
   const { user, isAuthenticated } = useAuth();
@@ -46,6 +47,7 @@ export default function UsuariosPage() {
         )}
 
         <ProfileForm />
+        <LembretesCard />
         <PasswordForm />
 
         <footer className="mt-12 pb-8 text-center">
@@ -125,6 +127,13 @@ function ProfileForm() {
             onChange={(e) => setPhone(e.target.value)}
             data-testid="input-profile-phone"
           />
+          {phone.trim().length > 0 && !normalizePhoneBR(phone) && (
+            // Avisa sem impedir: o campo é texto livre desde antes dos
+            // lembretes, e recusar agora invalidaria cadastros que já existem.
+            <p className="text-xs text-muted-foreground" data-testid="hint-profile-phone">
+              Informe DDD + número para o admin conseguir falar com você pelo WhatsApp.
+            </p>
+          )}
         </div>
         <div className="space-y-2">
           <Label htmlFor="profile-cell">Célula</Label>

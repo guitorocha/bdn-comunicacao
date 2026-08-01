@@ -19,7 +19,9 @@ de outra pessoa.
 - Foto de perfil / avatar.
 - Alteração de `username` (imutável por decisão).
 - Alteração das próprias `roles` — quem define funções é o admin ([spec 005](005-escalas-de-voluntarios.md)).
-- Preferências de notificação (não há notificação).
+- Preferências de notificação além de ligar/desligar os lembretes de escala no aparelho
+  atual ([spec 008](008-lembretes-de-escala.md)) — não há escolha de horário, de canal nem
+  de tipo de aviso.
 
 ## Histórias de usuário
 

@@ -2,11 +2,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { Clock, Pencil, Trash2 } from "lucide-react";
-import { isTrainingRole, SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, type Schedule } from "@shared/schema";
+import { Clock, MessageCircle, Pencil, Trash2 } from "lucide-react";
+import { isTrainingRole, SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, type Schedule, type TeamUser } from "@shared/schema";
 import {
   formatScheduleDate, monthlyLoadOf, ROLE_BADGE_CLASSES, ROLE_ICONS,
-  scheduleMonth, OVERLOAD_THRESHOLD, type MonthlyLoad,
+  scheduleMonth, whatsappLembreteUrl, OVERLOAD_THRESHOLD, type MonthlyLoad,
 } from "@/lib/escalas";
 import { OverloadWarning } from "@/components/escalas/OverloadWarning";
 
@@ -15,11 +15,14 @@ interface ScheduleCardProps {
   highlightVolunteerId?: number | null;
   // Só o admin recebe: marca quem já passou do limite de escalas neste mês
   monthlyLoad?: MonthlyLoad;
+  // Só o admin recebe: cadastro do time, para oferecer a cobrança pelo WhatsApp
+  // de quem não vai receber o lembrete automático
+  team?: TeamUser[];
   onEdit?: (schedule: Schedule) => void;
   onDelete?: (schedule: Schedule) => void;
 }
 
-export function ScheduleCard({ schedule, highlightVolunteerId, monthlyLoad, onEdit, onDelete }: ScheduleCardProps) {
+export function ScheduleCard({ schedule, highlightVolunteerId, monthlyLoad, team, onEdit, onDelete }: ScheduleCardProps) {
   const month = scheduleMonth(schedule.eventDate);
 
   return (
@@ -66,6 +69,12 @@ export function ScheduleCard({ schedule, highlightVolunteerId, monthlyLoad, onEd
           const monthCount = assignment && monthlyLoad
             ? monthlyLoadOf(monthlyLoad, assignment.volunteerId, month)
             : 0;
+          // Quem já ativou os lembretes será avisado sozinho — o atalho só
+          // aparece para quem ficaria sem aviso nenhum.
+          const member = assignment ? team?.find((u) => u.id === assignment.volunteerId) : undefined;
+          const whatsappUrl = member && member.hasPushReminders === false
+            ? whatsappLembreteUrl(member, schedule)
+            : null;
           return (
             <div
               key={role}
@@ -85,6 +94,18 @@ export function ScheduleCard({ schedule, highlightVolunteerId, monthlyLoad, onEd
                   months={[{ month, count: monthCount }]}
                   testId={`warning-overload-schedule-${schedule.id}-${role}`}
                 />
+              )}
+              {whatsappUrl && (
+                <a
+                  href={whatsappUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Não recebe lembrete automático — avisar pelo WhatsApp"
+                  className="ml-auto shrink-0 text-muted-foreground hover:text-green-500 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-green-500/50"
+                  data-testid={`link-whatsapp-schedule-${schedule.id}-${role}`}
+                >
+                  <MessageCircle className="w-3.5 h-3.5" />
+                </a>
               )}
             </div>
           );

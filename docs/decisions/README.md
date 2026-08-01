@@ -43,3 +43,4 @@ antigo como "Substituída por ADR-XXXX". O histórico é o valor.
 | [0005](ADR-0005-conta-raiz-admin.md) | Conta raiz `admin` com privilégios especiais | Aceita |
 | [0006](ADR-0006-treinamento-como-funcao-de-escala.md) | "Treinamento" como função de escala | Aceita |
 | [0007](ADR-0007-serverless-cloudfront-lambda.md) | CloudFront + S3 + API Gateway + Lambda + DynamoDB | Aceita |
+| [0008](ADR-0008-web-push-para-lembretes.md) | Web Push como canal dos lembretes, em vez de WhatsApp | Aceita |

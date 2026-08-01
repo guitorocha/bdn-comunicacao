@@ -69,8 +69,13 @@ Revalida o cookie e devolve o `SafeUser` atualizado. Usado no boot do cliente.
 ## Usuários
 
 ### `GET /api/users` 🔒
-Admin recebe todos os campos (menos `password`). Usuário comum recebe apenas
-`{ id, username, displayName, isAdmin, roles }`.
+Admin recebe todos os campos (menos `password` e `pushSubscriptions`), acrescidos de
+`hasPushReminders: boolean` — derivado, para o admin saber quem **não** recebe lembrete
+automático. Usuário comum recebe apenas `{ id, username, displayName, isAdmin, roles }`.
+
+> `pushSubscriptions` **nunca** sai do servidor, em rota nenhuma: endereço de push mais
+> chaves é credencial de envio, não dado de cadastro. Toda resposta de usuário passa por
+> `toSafeUser` (`shared/schema.ts`).
 
 ### `GET /api/users/me` 🔒
 `SafeUser` do usuário da sessão.
@@ -267,6 +272,36 @@ corpo enviado). 404 se não existir.
 
 ---
 
+## Lembretes de escala
+
+Ver [spec 008](../specs/008-lembretes-de-escala.md) e
+[ADR-0008](../decisions/ADR-0008-web-push-para-lembretes.md).
+
+### `GET /api/push/chave-publica` 🔒
+`{ "chave": "<VAPID public key>" | null, "ativo": boolean }`. `ativo: false` significa
+servidor sem chaves VAPID configuradas — os lembretes estão desligados.
+
+### `POST /api/push/inscricoes` 🔒
+Corpo: `registerPushSchema` — `{ endpoint, keys: { p256dh, auth } }`. O dono da inscrição é
+**sempre** o usuário da sessão; não há id no corpo. Reinscrever o mesmo `endpoint` substitui
+a entrada anterior; acima de `MAX_PUSH_SUBSCRIPTIONS` (5) a mais antiga é descartada.
+Responde `201 { "success": true }`.
+
+### `DELETE /api/push/inscricoes` 🔒
+Corpo: `{ "endpoint": "…" }`. Remove aquele aparelho do usuário da sessão.
+
+### `POST /api/push/teste` 🔒
+Envia uma notificação de teste para os aparelhos do próprio usuário. `400` se ele não tiver
+nenhum inscrito, `503` se o servidor estiver sem chaves VAPID, `502` se nenhum envio for
+aceito pelo serviço de push.
+
+### `POST /api/escalas/lembretes` 🛡️
+Corpo: `{ "tipo": "semana" | "dia" }`. Dispara o mesmo job que o EventBridge Scheduler
+executa. Responde o resultado: `{ tipo, de, ate, escalas, enviados, jaAvisados,
+semInscricao, falhas }`. Reexecutar é seguro — quem já foi avisado não é avisado de novo.
+
+---
+
 ## Resumo de autorização
 
 | Rota | 🌐 | 🔒 | 🛡️ |
@@ -284,6 +319,8 @@ corpo enviado). 404 se não existir.
 | `GET/POST /api/unavailability`, `DELETE /api/unavailability/:id` | | ✅ | |
 | `GET /api/schedules` | | ✅ | |
 | `POST/PUT/DELETE /api/schedules*` | | | ✅ |
+| `GET /api/push/chave-publica`, `POST/DELETE /api/push/inscricoes`, `POST /api/push/teste` | | ✅ | |
+| `POST /api/escalas/lembretes` | | | ✅ |
 
 ## Pendência conhecida
 

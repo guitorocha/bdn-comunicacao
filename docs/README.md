@@ -58,6 +58,7 @@ constitution.md  →  specs/NNN-*.md  →  decisions/ADR-*.md  →  código  →
 | 005 | [Escalas de voluntários](specs/005-escalas-de-voluntarios.md) | Implementada |
 | 006 | [Geração automática de escalas](specs/006-geracao-automatica-de-escalas.md) | Implementada |
 | 007 | [Trilha de auditoria](specs/007-trilha-de-auditoria.md) | Implementada (sem UI) |
+| 008 | [Lembretes de escala](specs/008-lembretes-de-escala.md) | Implementada |
 
 Nova spec? Copie [`specs/_template.md`](specs/_template.md) e use o próximo número livre.
 
@@ -72,6 +73,7 @@ Nova spec? Copie [`specs/_template.md`](specs/_template.md) e use o próximo nú
 | [0005](decisions/ADR-0005-conta-raiz-admin.md) | Conta raiz `admin` com privilégios especiais | Aceita |
 | [0006](decisions/ADR-0006-treinamento-como-funcao-de-escala.md) | "Treinamento" como função de escala, não como flag | Aceita |
 | [0007](decisions/ADR-0007-serverless-cloudfront-lambda.md) | CloudFront + S3 + API Gateway + Lambda + DynamoDB | Aceita |
+| [0008](decisions/ADR-0008-web-push-para-lembretes.md) | Web Push como canal dos lembretes, em vez de WhatsApp | Aceita |
 
 ## Convenções desta documentação
 

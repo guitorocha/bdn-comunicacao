@@ -26,7 +26,9 @@ fluxos que, antes deste sistema, viviam em grupos de WhatsApp:
 
 Registrado para evitar que alguém "complete" a funcionalidade sem contexto:
 
-- **Não envia e-mail nem notificação push.** O aviso continua sendo pelo WhatsApp do time.
+- **Não envia e-mail, WhatsApp nem SMS.** O único aviso automático é a notificação push do
+  navegador, e só para lembrete de escala ([spec 008](../specs/008-lembretes-de-escala.md)).
+  Quem não ativa continua sendo avisado pelo WhatsApp do time, na mão.
 - **Não faz upload de arquivo** (arte, foto, vídeo). Não há S3 de mídia nem quota.
 - **Não tem autocadastro.** Contas são criadas por administradores — a equipe é fechada.
 - **Não tem recuperação de senha por e-mail.** Quem esquece pede reset a um admin.

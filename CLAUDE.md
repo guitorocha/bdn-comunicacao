@@ -12,7 +12,7 @@ repositório.
 Sistema de gestão do Ministério de Comunicação da Igreja Bola de Neve Nação. Duas áreas:
 **solicitações de divulgação** (pedidos dos ministérios, com painel e acompanhamento
 público) e **escalas de voluntários** (funções, indisponibilidade, geração automática por
-rodízio, treinamento).
+rodízio, treinamento, lembretes por notificação push).
 
 SPA React + Express empacotado em Lambda + DynamoDB, servidos por uma única distribuição
 CloudFront. Interface e domínio em português.
@@ -20,11 +20,12 @@ CloudFront. Interface e domínio em português.
 ## Comandos
 
 ```bash
-npm run dev      # servidor de desenvolvimento (API + Vite) em http://localhost:5000
-npm run check    # tsc — ÚNICO portão automatizado; rode sempre antes de concluir
-npm run build    # cliente + bundles do servidor + dist/lambda.zip
-npm start        # roda dist/index.cjs com NODE_ENV=production → DynamoDB REAL
-npm run db:push  # ⚠️ NÃO USE — resquício do template Postgres; não há banco relacional
+npm run dev       # servidor de desenvolvimento (API + Vite) em http://localhost:5000
+npm run check     # tsc — ÚNICO portão automatizado; rode sempre antes de concluir
+npm run build     # cliente + bundles do servidor + dist/lambda.zip
+npm start         # roda dist/index.cjs com NODE_ENV=production → DynamoDB REAL
+npm run push:keys # gera o par VAPID dos lembretes (só quando for configurar)
+npm run db:push   # ⚠️ NÃO USE — resquício do template Postgres; não há banco relacional
 ```
 
 Não há testes automatizados. Em desenvolvimento o storage é em memória, com usuários
@@ -38,10 +39,15 @@ server/routes.ts     Todas as rotas, rate limits e middlewares de auth
 server/storage.ts    Interface IStorage + MemStorage (dev) + escolha da implementação
 server/storage-dynamo.ts   DynamoStorage (produção)
 server/index.ts      Entrypoint dev / npm start
-server/lambda.ts     Entrypoint de produção (handler da Lambda)
+server/lambda.ts     Entrypoint HTTP de produção (handler da Lambda do backend)
+server/lembretes-handler.ts  Entrypoint da Lambda de lembretes (EventBridge Scheduler)
+server/lembretes.ts  Job de lembrete de escala (janela, agrupamento, idempotência)
+server/push.ts       Envio de notificação push — o único ponto que fala com fora
 client/src/lib/escalas.ts  Rodízio, carga mensal, roster de período
+client/src/lib/push.ts     Ativar/desativar notificação no navegador
+client/public/sw.js  Service worker (só push; não faz cache)
 client/src/pages/    Uma página por rota (wouter com hash: /#/escalas)
-infra/               Terraform (S3, CloudFront, API Gateway, Lambda, 7 tabelas, IAM)
+infra/               Terraform (S3, CloudFront, API Gateway, Lambda, 7 tabelas, IAM, Scheduler)
 docs/                Documentação SDD — specs, ADRs, arquitetura, guias
 ```
 
@@ -50,8 +56,10 @@ docs/                Documentação SDD — specs, ADRs, arquitetura, guias
 1. **`pgTable` não significa PostgreSQL.** O banco é DynamoDB. Sem migração, sem transação,
    sem constraint. `.notNull()`/`.unique()` são decorativos.
    ([ADR-0002](docs/decisions/ADR-0002-drizzle-como-fonte-de-tipos.md))
-2. **Dois entrypoints de servidor.** Middleware adicionado só em `server/index.ts` **não
+2. **Três entrypoints de servidor.** Middleware adicionado só em `server/index.ts` **não
    existe em produção** — replique em `server/lambda.ts` ou coloque em `registerRoutes`.
+   O terceiro, `server/lembretes-handler.ts`, roda numa Lambda separada e não passa por
+   Express nenhum.
 3. **A ordem de `SCHEDULE_ROLES` é regra de negócio.** `treinamento` por último faz a geração
    automática preencher o aprendiz depois das funções operacionais.
 4. **Roteamento por hash**, com dois padrões de query: o login lê `?next=` de
@@ -70,7 +78,8 @@ docs/                Documentação SDD — specs, ADRs, arquitetura, guias
 Extraídas de [`docs/constitution.md`](docs/constitution.md):
 
 - Toda rota nova é **privada por padrão**; tornar pública é decisão documentada.
-- Nenhuma resposta contém `password`. Autor/ator vem sempre da sessão, nunca do corpo.
+- Nenhuma resposta contém `password` nem `pushSubscriptions` — use `toSafeUser`. Autor/ator
+  vem sempre da sessão, nunca do corpo.
 - **Nunca** logar corpo de request ou de resposta (carregam senha e token).
 - Nenhum segredo versionado. Em produção, sem `JWT_SECRET` de 32+ caracteres o app **não
   sobe** — de propósito.

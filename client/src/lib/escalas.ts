@@ -4,6 +4,8 @@ import { ptBR } from "date-fns/locale";
 import {
   EVENT_PERIODS,
   isTrainingRole,
+  mensagemLembrete,
+  normalizePhoneBR,
   OPERATIONAL_ROLES,
   periodOfTime,
   SCHEDULE_ROLES,
@@ -12,6 +14,7 @@ import {
   type Schedule,
   type ScheduleAssignment,
   type ScheduleRole,
+  type TeamUser,
   type Unavailability,
   type UnavailabilityPeriod,
 } from "@shared/schema";
@@ -33,6 +36,31 @@ export const ROLE_BADGE_CLASSES: Record<ScheduleRole, string> = {
   transmissao: "bg-purple-500/10 text-purple-500 border-purple-500/20",
   treinamento: "bg-muted text-muted-foreground border-dashed border-muted-foreground/40",
 };
+
+// ── Cobrança manual pelo WhatsApp ──
+// Saída para quem não ativou as notificações — em especial o iPhone, onde o
+// push exige instalar o app na tela de início. Não é integração: é o link
+// wa.me de sempre, aberto pelo admin, com o texto do lembrete já escrito. Usa a
+// mesma `mensagemLembrete` do envio automático para os dois não divergirem.
+export function whatsappLembreteUrl(user: TeamUser, schedule: Schedule): string | null {
+  const phone = normalizePhoneBR(user.phone);
+  if (!phone) return null;
+
+  const roles = schedule.assignments.filter((a) => a.volunteerId === user.id).map((a) => a.role);
+  if (roles.length === 0) return null;
+
+  // "semana" e não "dia": a mensagem sai com a data por extenso, que é o que
+  // faz sentido quando o admin cobra alguém dias antes.
+  const { titulo, corpo } = mensagemLembrete("semana", user.displayName, [
+    {
+      eventDate: schedule.eventDate,
+      eventTime: schedule.eventTime,
+      title: schedule.title,
+      roles,
+    },
+  ]);
+  return `https://wa.me/${phone}?text=${encodeURIComponent(`${titulo}\n${corpo}`)}`;
+}
 
 export function formatScheduleDate(dateStr: string): string {
   try {

@@ -6,8 +6,8 @@
 | **Status** | Implementada |
 | **Atores** | Voluntário, Administrador |
 | **Depende de** | [003 — Autenticação](003-autenticacao-e-contas.md) |
-| **Relacionada** | [006 — Geração automática](006-geracao-automatica-de-escalas.md) |
-| **Última revisão** | 2026-07-29 |
+| **Relacionada** | [006 — Geração automática](006-geracao-automatica-de-escalas.md), [008 — Lembretes de escala](008-lembretes-de-escala.md) |
+| **Última revisão** | 2026-07-31 |
 
 ## Objetivo
 
@@ -19,7 +19,10 @@ avisar o admin quando alguém estiver sobrecarregado ou numa combinação proibi
 
 - Confirmação/aceite do voluntário ("confirmo presença").
 - Troca de escala entre voluntários (swap) dentro do sistema.
-- Notificação de escala (lembrete por WhatsApp/e-mail).
+- Notificação de escala — passou a existir na
+  [spec 008](008-lembretes-de-escala.md), por notificação push do navegador. Envio por
+  WhatsApp/e-mail continua fora de escopo
+  ([ADR-0008](../decisions/ADR-0008-web-push-para-lembretes.md)).
 - Mais de um voluntário na mesma função no mesmo evento — a estrutura de formulário permite
   **um por função**.
 - Escala recorrente que se reprocessa sozinha (a geração é um ato pontual).

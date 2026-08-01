@@ -27,7 +27,8 @@ Produz:
 |---|---|
 | `dist/public/` | S3 (passo 3) |
 | `dist/lambda.zip` | Terraform (passo 2) |
-| `dist/lambda.js` | Conteúdo do ZIP |
+| `dist/lambda.js` | Conteúdo do ZIP — handler do backend |
+| `dist/lembretes.js` | Conteúdo do ZIP — handler da Lambda de lembretes ([ADR-0008](../decisions/ADR-0008-web-push-para-lembretes.md)) |
 | `dist/index.cjs` | Servidor tradicional — **não usado no deploy serverless** |
 
 Se o `terraform plan` falhar com `filebase64sha256 ... cannot find the file`, o build não
@@ -52,6 +53,29 @@ terraform init; terraform plan; terraform apply
 
 > **Trocar o `JWT_SECRET` desloga todo mundo.** Não é falha — é a forma de revogação em
 > massa. Se não passar a variável, o `apply` falha na validação (mínimo 32 caracteres).
+
+### Lembretes de escala (opcional)
+
+Sem as chaves VAPID o `apply` funciona normalmente e o resto da aplicação fica intacto —
+só os lembretes ficam desligados, em silêncio. Para ligá-los, gere o par **antes** do
+`apply`:
+
+```bash
+npm run push:keys
+```
+
+```bash
+export TF_VAR_vapid_public_key="<chave pública impressa>"
+export TF_VAR_vapid_private_key="<chave privada impressa>"
+```
+```powershell
+$env:TF_VAR_vapid_public_key = "<chave pública impressa>"
+$env:TF_VAR_vapid_private_key = "<chave privada impressa>"
+```
+
+> **Trocar o par VAPID invalida todas as inscrições já feitas** — cada pessoa precisa
+> reativar as notificações no aparelho dela. Mesmo peso de trocar o `JWT_SECRET`
+> ([ADR-0008](../decisions/ADR-0008-web-push-para-lembretes.md)).
 
 ## Passo 3 — Frontend e invalidação
 
@@ -87,9 +111,12 @@ Abra a URL e confirme:
 - [ ] Uma rota autenticada responde (ex.: `/#/escalas` lista escalas).
 - [ ] O formulário público cria uma solicitação de teste — e a apague depois, se criar.
 - [ ] O log da Lambda não traz `JWT_SECRET ausente` nem `AccessDeniedException`.
+- [ ] Se as chaves VAPID foram configuradas: em `/#/escalas`, ative as notificações e use o
+      botão de teste — a notificação deve chegar ao aparelho.
 
 ```bash
 aws logs tail /aws/lambda/bdn-comunicacao-backend --since 10m --follow
+aws logs tail /aws/lambda/bdn-comunicacao-reminders --since 10m --follow
 ```
 
 ## Semear a conta raiz (primeira instalação)
@@ -162,6 +189,8 @@ Front e backend são independentes: dá para reverter só o S3 (front) ou só a 
 | Front antigo continua aparecendo | Faltou a invalidação do CloudFront |
 | Rate limit disparando cedo demais | `trust proxy` desativado faria todos contarem como um IP — confira que está ligado nos **dois** entrypoints |
 | `GET /health` retorna 404 | Esperado: a rota existe no API Gateway e não no Express. Ver [`../backlog.md`](../backlog.md) |
+| Lembretes não chegam, sem erro visível | Confira `aws logs tail /aws/lambda/bdn-comunicacao-reminders` — sem chaves VAPID o job loga "push desligado" e encerra sem enviar |
+| `Tipo de lembrete desconhecido` no log dos lembretes | Payload do EventBridge Scheduler divergiu do esperado — confira `infra/eventbridge.tf` |
 
 ## Backup
 

@@ -1,0 +1,19 @@
+{
+  "name": "Comunicação BDN",
+  "short_name": "Comunicação",
+  "description": "Escalas e solicitações do Ministério de Comunicação da Igreja Bola de Neve",
+  "lang": "pt-BR",
+  "start_url": "/#/escalas",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0a0a",
+  "theme_color": "#0a0a0a",
+  "icons": [
+    {
+      "src": "/logo-bdn.png",
+      "sizes": "any",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

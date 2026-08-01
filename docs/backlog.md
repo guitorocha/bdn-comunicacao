@@ -1,8 +1,9 @@
 # Backlog — Lacunas, Dívidas e Próximos Passos
 
 Inventário do que se sabe estar faltando ou torto, levantado na documentação inicial
-(2026-07-29) a partir da leitura do código. **Nada aqui foi corrigido** — este documento é o
-registro, não a correção.
+(2026-07-29) a partir da leitura do código e atualizado a cada funcionalidade nova
+(B-29 a B-31 vieram dos lembretes de escala, 2026-07-31). **Nada aqui foi corrigido** —
+este documento é o registro, não a correção.
 
 Cada item traz: o que é, por que importa, e onde mexer. Prioridade é sugestão, não decisão.
 
@@ -183,6 +184,30 @@ não corresponde ao conteúdo.
 Painel de solicitações a cada 5 s; escalas a cada 10 s.
 **Correção:** aceitável no volume atual; só reveja se o custo de invocação incomodar.
 
+### B-29 — Lembrete que não chega não avisa ninguém
+Se todos os envios de um voluntário falharem, o job conta a falha no log da Lambda e segue.
+Não há tela, alerta nem e-mail — e a marca de idempotência já foi gravada, então aquele
+lembrete não é retentado ([spec 008](specs/008-lembretes-de-escala.md), RN-3).
+**Risco:** alguém deixa de ser avisado e ninguém percebe até o culto.
+**Correção:** um `aws_cloudwatch_metric_alarm` sobre `Errors` da função
+`${app_name}-reminders` — barato agora que o job tem função e log group próprios
+([ADR-0008](decisions/ADR-0008-web-push-para-lembretes.md)). Para as falhas parciais (envio
+que não completa, sem a função quebrar), expor o resultado dos últimos disparos numa tela
+de admin.
+
+### B-30 — Push no iPhone exige instalar o app na Tela de Início
+Limitação da Apple, não do projeto: o Safari só entrega notificação para web app instalado.
+A tela explica o passo a passo, mas quem não fizer não recebe lembrete nenhum.
+**Correção:** não há, do lado do código. Se a adesão ficar baixa, a saída documentada é
+migrar o canal para a Cloud API do WhatsApp com um segundo número
+([ADR-0008](decisions/ADR-0008-web-push-para-lembretes.md)).
+
+### B-31 — `terraform fmt` desalinhado em quatro arquivos
+`api_gateway.tf`, `cloudfront.tf`, `lambda.tf` e `outputs.tf` não passam em
+`terraform fmt -check` — anterior a este backlog, cosmético.
+**Correção:** rodar `terraform fmt` num commit isolado, para o diff não se misturar a
+mudança de comportamento.
+
 ---
 
 ## Ideias de produto (sem decisão)
@@ -192,6 +217,9 @@ Registradas para não se perderem — nenhuma foi pedida:
 - Confirmação de presença do voluntário na escala.
 - Troca de escala entre voluntários (swap com aprovação do admin).
 - Exportação da escala do mês (imagem ou PDF) para postar no grupo.
-- Lembrete automático na véspera do culto (exigiria integração de mensagens — hoje fora de
-  escopo por decisão).
 - Histórico "quantas vezes servi este ano" na visão do voluntário.
+
+> O lembrete automático **saiu desta lista**: foi implementado por notificação push na
+> [spec 008](specs/008-lembretes-de-escala.md), com a escolha do canal registrada no
+> [ADR-0008](decisions/ADR-0008-web-push-para-lembretes.md). Envio por WhatsApp continua
+> fora de escopo.

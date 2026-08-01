@@ -115,6 +115,12 @@ resource "aws_lambda_function" "backend" {
       TABLE_UNAVAILABILITY = aws_dynamodb_table.unavailability.name
       TABLE_AUDIT          = aws_dynamodb_table.audit.name
       STAGE               = aws_apigatewayv2_stage.default.name
+      # O backend também assina envio: a rota /api/push/teste manda a
+      # notificação de conferência. Sem as chaves ela responde 503 e o resto
+      # da aplicação segue normal.
+      VAPID_PUBLIC_KEY     = var.vapid_public_key
+      VAPID_PRIVATE_KEY    = var.vapid_private_key
+      VAPID_SUBJECT        = var.vapid_subject
     }
   }
 
@@ -127,5 +133,108 @@ resource "aws_lambda_function" "backend" {
 # CloudWatch Log Group com retenção de 30 dias (evita acúmulo de logs)
 resource "aws_cloudwatch_log_group" "lambda_backend" {
   name              = "/aws/lambda/${aws_lambda_function.backend.function_name}"
+  retention_in_days = 30
+}
+
+# ──────────────────────────────────────────────
+# Lambda Function — Lembretes de escala
+#
+# Função separada do backend, e não um ramo dentro dele (ver ADR-0008):
+#   - o timeout do job (120s) não vira teto de faturamento do request HTTP;
+#   - dá para alarmar sobre a métrica de erro DESTA função sem que qualquer
+#     500 da API dispare o alarme junto;
+#   - a role concede só o que o job usa, em duas tabelas.
+# As duas funções compartilham o MESMO ZIP, mudando só o handler — assim uma
+# não fica numa versão do código e a outra noutra.
+# ──────────────────────────────────────────────
+
+resource "aws_iam_role" "reminders_exec" {
+  name = "${var.app_name}-reminders-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "reminders_basic" {
+  role       = aws_iam_role.reminders_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Menor privilégio: o job lê as escalas e os usuários, grava a marca de
+# lembrete enviado e remove inscrição de push que morreu. Não toca em
+# solicitações, subtarefas, comentários nem na trilha de auditoria.
+resource "aws_iam_role_policy" "reminders_dynamodb" {
+  name = "${var.app_name}-reminders-dynamodb-policy"
+  role = aws_iam_role.reminders_exec.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "LeituraDeEscalasEUsuarios"
+        Effect = "Allow"
+        Action = [
+          "dynamodb:GetItem",
+          "dynamodb:Scan",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = [
+          aws_dynamodb_table.users.arn,
+          aws_dynamodb_table.schedules.arn,
+        ]
+      }
+    ]
+  })
+}
+
+resource "aws_lambda_function" "reminders" {
+  function_name = "${var.app_name}-reminders"
+  description   = "Lembretes de escala por notificação push (EventBridge Scheduler)"
+
+  filename         = var.lambda_zip_path
+  source_code_hash = filebase64sha256(var.lambda_zip_path)
+
+  runtime       = "nodejs20.x"
+  handler       = "dist/lembretes.handler"
+  architectures = ["arm64"]
+
+  role        = aws_iam_role.reminders_exec.arn
+  timeout     = var.reminders_timeout
+  memory_size = var.reminders_memory_size
+
+  environment {
+    variables = {
+      NODE_ENV        = var.environment
+      DYNAMODB_REGION = var.aws_region
+      # Só as tabelas que o job usa — as demais nem são referenciadas
+      TABLE_USERS     = aws_dynamodb_table.users.name
+      TABLE_SCHEDULES = aws_dynamodb_table.schedules.name
+      # Sem as chaves o job registra "push desligado" no log e encerra sem enviar
+      VAPID_PUBLIC_KEY  = var.vapid_public_key
+      VAPID_PRIVATE_KEY = var.vapid_private_key
+      VAPID_SUBJECT     = var.vapid_subject
+      # Sem JWT_SECRET de propósito: este bundle não importa `tokens.ts` e o job
+      # não emite sessão nenhuma.
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.reminders_basic,
+    aws_iam_role_policy.reminders_dynamodb,
+  ]
+}
+
+resource "aws_cloudwatch_log_group" "lambda_reminders" {
+  name              = "/aws/lambda/${aws_lambda_function.reminders.function_name}"
   retention_in_days = 30
 }

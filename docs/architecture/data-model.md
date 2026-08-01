@@ -32,6 +32,7 @@ erDiagram
         string phone
         string cellName
         string cellLeaders
+        json pushSubscriptions
     }
     REQUESTS {
         number id PK
@@ -69,6 +70,7 @@ erDiagram
         string notes
         json assignments
         string createdAt
+        json remindersSent
     }
     UNAVAILABILITY {
         number id PK
@@ -146,9 +148,13 @@ volume real e **não é protegida por escrita condicional** — risco aceito
 | `failedLoginCount` | number | Zera no acerto |
 | `lockedAt` | string \| null | ISO 8601; preenchido = conta bloqueada |
 | `email`, `phone`, `cellName`, `cellLeaders` | string \| null | Perfil, preenchido pelo próprio membro |
+| `pushSubscriptions` | `PushSubscription[]` | Aparelhos inscritos nos lembretes de escala. Vazio = a pessoa não recebe notificação. Máximo de 5 ([spec 008](../specs/008-lembretes-de-escala.md)) |
 
-**Nunca serializado ao cliente:** `password`. Toda rota faz
-`const { password, ...safeUser } = user` antes de responder. Ver `SafeUser`.
+**Nunca serializado ao cliente:** `password` e `pushSubscriptions`. Toda rota responde
+`toSafeUser(user)` (`shared/schema.ts`), e `SafeUser` exclui os dois em tipo. As assinaturas
+saem da lista porque endereço de push + chaves permitem **enviar** notificação para o
+aparelho da pessoa — é credencial, não cadastro. O admin recebe só `hasPushReminders`,
+derivado.
 
 **Visibilidade assimétrica em `GET /api/users`:** admin recebe o cadastro completo; usuário
 comum recebe apenas `id`, `username`, `displayName`, `isAdmin`, `roles`. Telefone e e-mail
@@ -190,6 +196,7 @@ sessão do autor, nunca do corpo do request.
 | `eventDate` / `eventTime` | `YYYY-MM-DD` / `HH:mm` — o horário determina o **período** |
 | `notes` | string \| null |
 | `assignments` | `ScheduleAssignment[]` **embutido** |
+| `remindersSent` | `string[]` — lembretes já disparados, no formato `` `${tipo}:${volunteerId}` `` |
 
 ```ts
 interface ScheduleAssignment {
@@ -212,6 +219,13 @@ desnormalização.
 **Duplicata:** a chave lógica de um culto é `(eventDate, eventTime)` — a geração automática
 pula datas/horários já ocupados. Isso **não** é imposto pelo banco; criação manual pode
 duplicar.
+
+**`remindersSent` não vem do formulário.** É escrito só pelo job de lembretes, com um
+`UpdateItem` condicional (`claimReminder`) que grava a marca apenas se ela ainda não existir
+— é o que garante que ninguém receba o mesmo aviso duas vezes quando a Lambda é
+reexecutada. `insertScheduleSchema` omite o campo, e `updateSchedule` usa o item atual como
+base justamente para o histórico sobreviver à edição da escala. Detalhes na
+[spec 008](../specs/008-lembretes-de-escala.md).
 
 ### `unavailability`
 

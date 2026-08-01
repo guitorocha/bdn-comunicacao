@@ -1,11 +1,13 @@
 import type { Express, Request as ExpressRequest, RequestHandler } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, isLocked, isRootAdmin, passwordIssue, trainingConflictMessage, trainingConflicts, MAX_FAILED_LOGINS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, UNAVAILABILITY_PERIODS, type InsertSchedule, type Schedule, type User } from "@shared/schema";
+import { insertRequestSchema, insertSubtaskSchema, insertCommentSchema, adminCreateUserSchema, insertScheduleSchema, updateProfileSchema, changePasswordSchema, adminResetPasswordSchema, registerPushSchema, isLocked, isRootAdmin, passwordIssue, toSafeUser, trainingConflictMessage, trainingConflicts, MAX_FAILED_LOGINS, REMINDER_KINDS, ROOT_ADMIN_USERNAME, SCHEDULE_ROLES, UNAVAILABILITY_PERIODS, type InsertSchedule, type Schedule, type User } from "@shared/schema";
 import { z } from "zod";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { recordAudit } from "./audit";
 import { hashPassword, isHashed, verifyPassword } from "./password";
+import { enviarPush, pushEnabled, vapidPublicKey } from "./push";
+import { executarLembretes } from "./lembretes";
 import {
   SESSION_COOKIE,
   clearSessionCookie,
@@ -186,11 +188,10 @@ export async function registerRoutes(
         found.mustChangePassword,
       )) ?? found;
     }
-    const { password: _pw, ...safeUser } = user;
     // O token sai só no cookie HttpOnly — não vai no corpo, senão o cliente
     // poderia guardá-lo de novo em localStorage e desfazer a proteção.
     setSessionCookie(res, user);
-    return res.json({ user: safeUser });
+    return res.json({ user: toSafeUser(user) });
   });
 
   // Sem estado no servidor: sair é apagar o cookie de sessão.
@@ -201,8 +202,7 @@ export async function registerRoutes(
 
   // Revalida o token e devolve o usuário atualizado (usado no boot do cliente)
   app.get("/api/auth/me", requireUser, async (req, res) => {
-    const { password, ...safeUser } = (req as AuthedRequest).authUser!;
-    return res.json(safeUser);
+    return res.json(toSafeUser((req as AuthedRequest).authUser!));
   });
 
   // ── Users (admin only) ──
@@ -213,7 +213,12 @@ export async function registerRoutes(
     const viewer = (req as AuthedRequest).authUser!;
     const users = await storage.getAllUsers();
     if (viewer.isAdmin) {
-      return res.json(users.map(({ password, ...rest }) => rest));
+      // `hasPushReminders` é derivado: o admin precisa saber quem NÃO vai
+      // receber o lembrete para cobrar essa pessoa por fora. As assinaturas em
+      // si nunca saem daqui — são credenciais de envio, não status de cadastro.
+      return res.json(
+        users.map((u) => ({ ...toSafeUser(u), hasPushReminders: u.pushSubscriptions.length > 0 })),
+      );
     }
     return res.json(
       users.map((u) => ({
@@ -229,8 +234,7 @@ export async function registerRoutes(
   // ── Perfil do próprio usuário (qualquer usuário autenticado) ──
 
   app.get("/api/users/me", requireUser, async (req, res) => {
-    const { password, ...safeUser } = (req as AuthedRequest).authUser!;
-    return res.json(safeUser);
+    return res.json(toSafeUser((req as AuthedRequest).authUser!));
   });
 
   app.patch("/api/users/me", requireUser, async (req, res) => {
@@ -241,8 +245,7 @@ export async function registerRoutes(
     }
     const updated = await storage.updateUserProfile(user.id, parsed.data);
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
-    const { password, ...safeUser } = updated;
-    return res.json(safeUser);
+    return res.json(toSafeUser(updated));
   });
 
   app.patch("/api/users/me/password", requireUser, async (req, res) => {
@@ -261,8 +264,7 @@ export async function registerRoutes(
     // A troca derruba os tokens antigos (inclusive em outros dispositivos);
     // reemite o cookie para quem acabou de trocar continuar na sessão.
     setSessionCookie(res, updated);
-    const { password: _pw, ...safeUser } = updated;
-    return res.json({ success: true, user: safeUser });
+    return res.json({ success: true, user: toSafeUser(updated) });
   });
 
   app.post("/api/users", requireAdmin, async (req, res) => {
@@ -286,8 +288,7 @@ export async function registerRoutes(
         target: user,
         detail: user.isAdmin ? "criado como administrador" : null,
       });
-      const { password, ...safeUser } = user;
-      return res.status(201).json(safeUser);
+      return res.status(201).json(toSafeUser(user));
     } catch (err) {
       if (err instanceof z.ZodError) {
         return res.status(400).json({ message: "Dados inválidos", errors: err.errors });
@@ -354,8 +355,7 @@ export async function registerRoutes(
     // a senha dele: reemite o cookie para ele não cair da sessão.
     if (isSelf) setSessionCookie(res, updated);
 
-    const { password, ...safeUser } = updated;
-    return res.json({ success: true, user: safeUser });
+    return res.json({ success: true, user: toSafeUser(updated) });
   });
 
   // Desbloqueio de conta. O bloqueio por senhas erradas é permanente — não há
@@ -379,8 +379,7 @@ export async function registerRoutes(
 
     await recordAudit(req, { action: "account.unlocked", actor, target });
 
-    const { password, ...safeUser } = updated;
-    return res.json({ success: true, user: safeUser });
+    return res.json({ success: true, user: toSafeUser(updated) });
   });
 
   // Leitura da trilha de auditoria — só admin. Append-only: não há rota que
@@ -423,8 +422,7 @@ export async function registerRoutes(
     }
     const updated = await storage.updateUserRoles(id, parsed.data);
     if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
-    const { password, ...safeUser } = updated;
-    return res.json(safeUser);
+    return res.json(toSafeUser(updated));
   });
 
   app.patch("/api/users/:id/admin", requireAdmin, async (req, res) => {
@@ -451,8 +449,7 @@ export async function registerRoutes(
       actor: (req as AuthedRequest).authUser!,
       target: updated,
     });
-    const { password, ...safeUser } = updated;
-    return res.json(safeUser);
+    return res.json(toSafeUser(updated));
   });
 
   // ── Requests ──
@@ -700,6 +697,82 @@ export async function registerRoutes(
     const deleted = await storage.deleteSchedule(id);
     if (!deleted) return res.status(404).json({ message: "Escala não encontrada" });
     return res.json({ success: true });
+  });
+
+  // ── Lembretes de escala ──
+  // Tudo aqui é privado: a chave pública VAPID é pública por natureza, mas
+  // publicá-la sem sessão só entregaria a quem passa por fora um identificador
+  // do servidor, sem ganho nenhum para quem usa o sistema.
+
+  app.get("/api/push/chave-publica", requireUser, async (_req, res) => {
+    return res.json({ chave: vapidPublicKey(), ativo: pushEnabled });
+  });
+
+  app.post("/api/push/inscricoes", requireUser, async (req, res) => {
+    const user = (req as AuthedRequest).authUser!;
+    const parsed = registerPushSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ message: "Inscrição de notificação inválida" });
+    }
+    // O dono da inscrição é sempre a sessão — mandar um id no corpo permitiria
+    // inscrever o aparelho de outra pessoa.
+    const updated = await storage.addPushSubscription(user.id, {
+      ...parsed.data,
+      createdAt: new Date().toISOString(),
+    });
+    if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+    return res.status(201).json({ success: true });
+  });
+
+  app.delete("/api/push/inscricoes", requireUser, async (req, res) => {
+    const user = (req as AuthedRequest).authUser!;
+    const endpoint = typeof req.body?.endpoint === "string" ? req.body.endpoint : null;
+    if (!endpoint) return res.status(400).json({ message: "Informe a inscrição a remover" });
+    const updated = await storage.removePushSubscription(user.id, endpoint);
+    if (!updated) return res.status(404).json({ message: "Usuário não encontrado" });
+    return res.json({ success: true });
+  });
+
+  // Sem esta rota não há como conferir se a notificação chega naquele aparelho
+  // sem esperar o próximo culto — e não existe teste automatizado no projeto.
+  app.post("/api/push/teste", requireUser, async (req, res) => {
+    const user = (req as AuthedRequest).authUser!;
+    if (!pushEnabled) {
+      return res.status(503).json({ message: "Notificações não estão configuradas no servidor" });
+    }
+    if (user.pushSubscriptions.length === 0) {
+      return res.status(400).json({ message: "Ative as notificações neste aparelho primeiro" });
+    }
+
+    let entregue = 0;
+    for (const subscription of user.pushSubscriptions) {
+      const status = await enviarPush(subscription, {
+        titulo: "Lembretes ativados",
+        corpo: "É assim que você será avisado quando estiver escalado.",
+        url: "/#/escalas",
+      });
+      if (status === "entregue") entregue++;
+      if (status === "expirada") await storage.removePushSubscription(user.id, subscription.endpoint);
+    }
+
+    if (entregue === 0) {
+      return res.status(502).json({ message: "Não foi possível entregar a notificação de teste" });
+    }
+    return res.json({ success: true, entregue });
+  });
+
+  // Disparo manual do mesmo job que o EventBridge Scheduler executa. Serve para
+  // o admin conferir o resultado na hora e para reenviar depois de uma falha.
+  app.post("/api/escalas/lembretes", requireAdmin, async (req, res) => {
+    const tipo = req.body?.tipo;
+    if (!REMINDER_KINDS.includes(tipo)) {
+      return res.status(400).json({ message: 'Informe o tipo do lembrete: "semana" ou "dia"' });
+    }
+    if (!pushEnabled) {
+      return res.status(503).json({ message: "Notificações não estão configuradas no servidor" });
+    }
+    const resultado = await executarLembretes(tipo);
+    return res.json(resultado);
   });
 
   return httpServer;
