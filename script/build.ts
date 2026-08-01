@@ -29,6 +29,7 @@ const allowlist = [
   "pg",
   "stripe",
   "uuid",
+  "web-push",
   "ws",
   "xlsx",
   "zod",
@@ -69,6 +70,13 @@ async function buildAll() {
   (dep) => dep !== "@vendia/serverless-express"
   );
   
+  // AWS SDK já vem pré-instalado no ambiente Lambda — não precisa no ZIP
+  const lambdaExternal = [
+    "@aws-sdk/client-dynamodb",
+    "@aws-sdk/lib-dynamodb",
+    ...lambdaExternals,
+  ];
+
   await esbuild({
     entryPoints: ["server/lambda.ts"],
     platform: "node",
@@ -80,21 +88,39 @@ async function buildAll() {
       "process.env.NODE_ENV": '"production"',
     },
     minify: true,
-    external: [
-      // AWS SDK já vem pré-instalado no ambiente Lambda — não precisa no ZIP
-      "@aws-sdk/client-dynamodb",
-      "@aws-sdk/lib-dynamodb",
-      ...lambdaExternals,
-    ],
+    external: lambdaExternal,
+    logLevel: "info",
+  });
+
+  console.log("building reminders bundle...");
+
+  // Bundle separado, e não um segundo export do lambda.ts: assim o job de
+  // lembretes não carrega Express nem tokens.ts — que exige JWT_SECRET já na
+  // importação. Ver ADR-0008.
+  await esbuild({
+    entryPoints: ["server/lembretes-handler.ts"],
+    platform: "node",
+    target: "node20",
+    bundle: true,
+    format: "cjs",
+    outfile: "dist/lembretes.js",
+    define: {
+      "process.env.NODE_ENV": '"production"',
+    },
+    minify: true,
+    external: lambdaExternal,
     logLevel: "info",
   });
 
   console.log("packaging lambda zip...");
 
-  // O handler da Lambda é "dist/lambda.handler" (infra/lambda.tf), então o
-  // arquivo precisa ficar sob dist/ dentro do ZIP — não na raiz.
+  // Os handlers são "dist/lambda.handler" e "dist/lembretes.handler"
+  // (infra/lambda.tf), então os arquivos precisam ficar sob dist/ dentro do
+  // ZIP — não na raiz. As duas funções compartilham este mesmo pacote, o que
+  // impede que uma fique numa versão do código e a outra noutra.
   const zip = new AdmZip();
   zip.addLocalFile("dist/lambda.js", "dist");
+  zip.addLocalFile("dist/lembretes.js", "dist");
 
   // Timestamp fixo: sem isso o mtime entra no ZIP e o source_code_hash muda a
   // cada build, redeployando a Lambda mesmo com o bundle byte-a-byte idêntico.

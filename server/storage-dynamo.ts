@@ -1,4 +1,5 @@
 import {
+  ConditionalCheckFailedException,
   DynamoDBClient,
   type DynamoDBClientConfig,
 } from "@aws-sdk/client-dynamodb";
@@ -22,6 +23,7 @@ import {
   type ScheduleRole,
   type UpdateProfile,
   type AuditEntry, type InsertAuditEntry,
+  type PushSubscription, MAX_PUSH_SUBSCRIPTIONS,
 } from "@shared/schema";
 
 import type { IStorage } from "./storage";
@@ -65,7 +67,15 @@ function normalizeUser(item: Record<string, unknown> | undefined): User | undefi
     // Idem para o bloqueio: sem o atributo, a conta está liberada e sem erros
     failedLoginCount: user.failedLoginCount ?? 0,
     lockedAt: user.lockedAt ?? null,
+    // Quem se cadastrou antes dos lembretes não tem nenhum aparelho inscrito
+    pushSubscriptions: user.pushSubscriptions ?? [],
   };
+}
+
+// Escalas criadas antes dos lembretes não têm o histórico de envio
+function normalizeSchedule(item: Record<string, unknown>): Schedule {
+  const schedule = item as Schedule;
+  return { ...schedule, remindersSent: schedule.remindersSent ?? [] };
 }
 
 // Indisponibilidades registradas antes do campo `period` bloqueavam o dia inteiro
@@ -84,6 +94,10 @@ const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: nu
 
 // Conta nova nasce liberada e sem histórico de erro
 const unlocked = { failedLoginCount: 0, lockedAt: null };
+
+// Ninguém nasce inscrito: a assinatura só existe depois que a pessoa permite a
+// notificação no navegador dela
+const noReminders = { pushSubscriptions: [] as PushSubscription[] };
 
 function generateId(): number {
   return Date.now() * 1000 + Math.floor(Math.random() * 1000);
@@ -125,6 +139,7 @@ export class DynamoStorage implements IStorage {
     const user: User = {
       ...emptyProfile,
       ...unlocked,
+      ...noReminders,
       id: generateId(),
       ...data,
       isAdmin: false,
@@ -139,6 +154,7 @@ export class DynamoStorage implements IStorage {
     const user: User = {
       ...emptyProfile,
       ...unlocked,
+      ...noReminders,
       id: generateId(),
       ...data,
       isAdmin: data.isAdmin ?? false,
@@ -217,6 +233,45 @@ export class DynamoStorage implements IStorage {
       UpdateExpression: "SET #p = :p, #m = :m",
       ExpressionAttributeNames: { "#p": "password", "#m": "mustChangePassword" },
       ExpressionAttributeValues: { ":p": password, ":m": mustChangePassword },
+      ConditionExpression: "attribute_exists(id)",
+      ReturnValues: "ALL_NEW",
+    }));
+    return normalizeUser(result.Attributes);
+  }
+
+  async addPushSubscription(id: number, subscription: PushSubscription): Promise<User | undefined> {
+    // Leitura antes da escrita porque o teto de assinaturas e a substituição do
+    // mesmo aparelho não cabem numa UpdateExpression. A corrida possível é a
+    // pessoa inscrevendo dois aparelhos no mesmo segundo — nesse caso um dos
+    // dois se reinscreve no próximo acesso.
+    const current = await this.getUser(id);
+    if (!current) return undefined;
+    const outros = current.pushSubscriptions.filter((s) => s.endpoint !== subscription.endpoint);
+    const pushSubscriptions = [...outros, subscription].slice(-MAX_PUSH_SUBSCRIPTIONS);
+
+    const result = await db.send(new UpdateCommand({
+      TableName: TABLE_USERS,
+      Key: { id },
+      UpdateExpression: "SET #ps = :ps",
+      ExpressionAttributeNames: { "#ps": "pushSubscriptions" },
+      ExpressionAttributeValues: { ":ps": pushSubscriptions },
+      ConditionExpression: "attribute_exists(id)",
+      ReturnValues: "ALL_NEW",
+    }));
+    return normalizeUser(result.Attributes);
+  }
+
+  async removePushSubscription(id: number, endpoint: string): Promise<User | undefined> {
+    const current = await this.getUser(id);
+    if (!current) return undefined;
+    const pushSubscriptions = current.pushSubscriptions.filter((s) => s.endpoint !== endpoint);
+
+    const result = await db.send(new UpdateCommand({
+      TableName: TABLE_USERS,
+      Key: { id },
+      UpdateExpression: "SET #ps = :ps",
+      ExpressionAttributeNames: { "#ps": "pushSubscriptions" },
+      ExpressionAttributeValues: { ":ps": pushSubscriptions },
       ConditionExpression: "attribute_exists(id)",
       ReturnValues: "ALL_NEW",
     }));
@@ -448,7 +503,7 @@ export class DynamoStorage implements IStorage {
 
   async getAllSchedules(): Promise<Schedule[]> {
     const result = await db.send(new ScanCommand({ TableName: TABLE_SCHEDULES }));
-    const items = (result.Items ?? []) as Schedule[];
+    const items = (result.Items ?? []).map(normalizeSchedule);
     return items.sort((a, b) =>
       `${a.eventDate} ${a.eventTime}`.localeCompare(`${b.eventDate} ${b.eventTime}`)
     );
@@ -456,7 +511,7 @@ export class DynamoStorage implements IStorage {
 
   async getSchedule(id: number): Promise<Schedule | undefined> {
     const result = await db.send(new GetCommand({ TableName: TABLE_SCHEDULES, Key: { id } }));
-    return result.Item as Schedule | undefined;
+    return result.Item ? normalizeSchedule(result.Item) : undefined;
   }
 
   async createSchedule(data: InsertSchedule): Promise<Schedule> {
@@ -465,6 +520,7 @@ export class DynamoStorage implements IStorage {
       ...data,
       notes: data.notes ?? null,
       createdAt: new Date().toISOString(),
+      remindersSent: [],
     };
     await db.send(new PutCommand({ TableName: TABLE_SCHEDULES, Item: schedule }));
     return schedule;
@@ -473,8 +529,10 @@ export class DynamoStorage implements IStorage {
   async updateSchedule(id: number, data: InsertSchedule): Promise<Schedule | undefined> {
     const current = await db.send(new GetCommand({ TableName: TABLE_SCHEDULES, Key: { id } }));
     if (!current.Item) return undefined;
+    // O item atual é a base, então `remindersSent` sobrevive à edição: remarcar
+    // o horário de uma escala não pode reenviar o lembrete de quem já recebeu.
     const updated: Schedule = {
-      ...(current.Item as Schedule),
+      ...normalizeSchedule(current.Item),
       ...data,
       notes: data.notes ?? null,
     };
@@ -485,5 +543,25 @@ export class DynamoStorage implements IStorage {
   async deleteSchedule(id: number): Promise<boolean> {
     await db.send(new DeleteCommand({ TableName: TABLE_SCHEDULES, Key: { id } }));
     return true;
+  }
+
+  async claimReminder(scheduleId: number, key: string): Promise<boolean> {
+    try {
+      await db.send(new UpdateCommand({
+        TableName: TABLE_SCHEDULES,
+        Key: { id: scheduleId },
+        UpdateExpression: "SET #rs = list_append(if_not_exists(#rs, :vazio), :marca)",
+        ExpressionAttributeNames: { "#rs": "remindersSent" },
+        ExpressionAttributeValues: { ":vazio": [], ":marca": [key], ":chave": key },
+        // A condição é o que torna a operação atômica: duas execuções do job em
+        // paralelo disputam a mesma marca e só uma consegue gravá-la.
+        ConditionExpression:
+          "attribute_exists(id) AND (attribute_not_exists(#rs) OR NOT contains(#rs, :chave))",
+      }));
+      return true;
+    } catch (err) {
+      if (err instanceof ConditionalCheckFailedException) return false;
+      throw err;
+    }
   }
 }

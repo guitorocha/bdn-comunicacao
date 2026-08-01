@@ -8,6 +8,7 @@ import {
   type ScheduleRole,
   type UpdateProfile,
   type AuditEntry, type InsertAuditEntry,
+  type PushSubscription, MAX_PUSH_SUBSCRIPTIONS,
 } from "@shared/schema";
 import { randomBytes } from "node:crypto";
 import { hashPassword, isHashed } from "./password";
@@ -28,6 +29,9 @@ export interface IStorage {
   updateUserPassword(id: number, password: string, mustChangePassword?: boolean): Promise<User | undefined>;
   // Contador de senhas erradas e bloqueio permanente da conta
   updateUserLockState(id: number, state: { failedLoginCount: number; lockedAt: string | null }): Promise<User | undefined>;
+  // Aparelhos inscritos para receber lembrete de escala
+  addPushSubscription(id: number, subscription: PushSubscription): Promise<User | undefined>;
+  removePushSubscription(id: number, endpoint: string): Promise<User | undefined>;
   // Auditoria (append-only)
   createAuditEntry(entry: InsertAuditEntry): Promise<AuditEntry>;
   getRecentAuditEntries(limit: number): Promise<AuditEntry[]>;
@@ -57,6 +61,10 @@ export interface IStorage {
   createSchedule(schedule: InsertSchedule): Promise<Schedule>;
   updateSchedule(id: number, schedule: InsertSchedule): Promise<Schedule | undefined>;
   deleteSchedule(id: number): Promise<boolean>;
+  // Reserva o envio de um lembrete: grava a marca só se ela ainda não existir e
+  // devolve `false` quando já estava lá. É o que impede o lembrete duplicado
+  // quando a Lambda é reexecutada — a marca é gravada ANTES do envio.
+  claimReminder(scheduleId: number, key: string): Promise<boolean>;
 }
 
 // Profile fields start empty — the member fills them in on /usuarios
@@ -64,6 +72,10 @@ const emptyProfile = { email: null, phone: null, cellName: null, cellLeaders: nu
 
 // Conta nova nasce liberada e sem histórico de erro
 const unlocked = { failedLoginCount: 0, lockedAt: null };
+
+// Ninguém nasce inscrito: a assinatura só existe depois que a pessoa permite a
+// notificação no navegador dela
+const noReminders = { pushSubscriptions: [] as PushSubscription[] };
 
 export class MemStorage implements IStorage {
   private users: Map<number, User> = new Map();
@@ -122,6 +134,7 @@ export class MemStorage implements IStorage {
     const user: User = {
       ...emptyProfile,
       ...unlocked,
+      ...noReminders,
       id,
       ...data,
       password: isHashed(data.password) ? data.password : hashPassword(data.password),
@@ -138,6 +151,7 @@ export class MemStorage implements IStorage {
     const user: User = {
       ...emptyProfile,
       ...unlocked,
+      ...noReminders,
       id,
       ...data,
       // O seed usa senhas em texto puro — guarda sempre o hash
@@ -196,6 +210,32 @@ export class MemStorage implements IStorage {
     user.mustChangePassword = mustChangePassword;
     this.users.set(id, user);
     return user;
+  }
+
+  async addPushSubscription(id: number, subscription: PushSubscription): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    // Reinscrever o mesmo aparelho substitui a entrada antiga em vez de somar:
+    // o navegador reemite a assinatura por conta própria (renovação de chave,
+    // limpeza de dados) e o endereço continua sendo o mesmo aparelho.
+    const outros = (user.pushSubscriptions ?? []).filter((s) => s.endpoint !== subscription.endpoint);
+    const updated: User = {
+      ...user,
+      pushSubscriptions: [...outros, subscription].slice(-MAX_PUSH_SUBSCRIPTIONS),
+    };
+    this.users.set(id, updated);
+    return updated;
+  }
+
+  async removePushSubscription(id: number, endpoint: string): Promise<User | undefined> {
+    const user = this.users.get(id);
+    if (!user) return undefined;
+    const updated: User = {
+      ...user,
+      pushSubscriptions: (user.pushSubscriptions ?? []).filter((s) => s.endpoint !== endpoint),
+    };
+    this.users.set(id, updated);
+    return updated;
   }
 
   async updateUserLockState(
@@ -362,12 +402,15 @@ export class MemStorage implements IStorage {
       ...data,
       notes: data.notes ?? null,
       createdAt: new Date().toISOString(),
+      remindersSent: [],
     };
     this.schedules.set(id, schedule);
     return schedule;
   }
 
   async updateSchedule(id: number, data: InsertSchedule): Promise<Schedule | undefined> {
+    // `data` não traz `remindersSent`: o histórico de lembretes sobrevive à
+    // edição da escala, senão remarcar o horário reenviaria tudo.
     const existing = this.schedules.get(id);
     if (!existing) return undefined;
     const updated: Schedule = { ...existing, ...data, notes: data.notes ?? null };
@@ -377,6 +420,15 @@ export class MemStorage implements IStorage {
 
   async deleteSchedule(id: number): Promise<boolean> {
     return this.schedules.delete(id);
+  }
+
+  async claimReminder(scheduleId: number, key: string): Promise<boolean> {
+    const schedule = this.schedules.get(scheduleId);
+    if (!schedule) return false;
+    const sent = schedule.remindersSent ?? [];
+    if (sent.includes(key)) return false;
+    this.schedules.set(scheduleId, { ...schedule, remindersSent: [...sent, key] });
+    return true;
   }
 }
 

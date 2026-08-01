@@ -12,18 +12,25 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { AlertTriangle } from "lucide-react";
 import {
-  SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS,
+  isTrainingRole, SCHEDULE_ROLES, SCHEDULE_ROLE_LABELS, trainingConflictMessage, trainingConflicts,
   type InsertSchedule, type SafeUser, type Schedule, type ScheduleAssignment,
   type ScheduleRole, type Unavailability, type UnavailabilityPeriod,
 } from "@shared/schema";
 import {
-  blocksPeriod, incrementMonthlyLoad, monthlyLoadByVolunteer, monthlyLoadOf, OVERLOAD_THRESHOLD,
-  periodOfTime, ROLE_ICONS, scheduleMonth, UNAVAILABLE_NOTE,
+  blockedNote, blocksPeriod, incrementMonthlyLoad, monthlyLoadByVolunteer, monthlyLoadOf,
+  OVERLOAD_THRESHOLD, periodOfTime, ROLE_ICONS, rosterOfPeriod, scheduleMonth, UNAVAILABLE_NOTE,
+  type PeriodRoster,
 } from "@/lib/escalas";
 import { OverloadWarning } from "@/components/escalas/OverloadWarning";
 
 const NONE = "none";
+
+// Uma entrada por função, todas vazias — deriva de SCHEDULE_ROLES para não
+// esquecer nenhuma quando a lista de funções mudar
+const emptySelections = (): Record<ScheduleRole, string> =>
+  Object.fromEntries(SCHEDULE_ROLES.map((role) => [role, NONE])) as Record<ScheduleRole, string>;
 
 interface ScheduleFormDialogProps {
   open: boolean;
@@ -43,9 +50,7 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
   const [eventDate, setEventDate] = useState("");
   const [eventTime, setEventTime] = useState("18:00");
   const [notes, setNotes] = useState("");
-  const [roleSelections, setRoleSelections] = useState<Record<ScheduleRole, string>>({
-    fotografia: NONE, filmmaker: NONE, projecao: NONE, transmissao: NONE,
-  });
+  const [roleSelections, setRoleSelections] = useState<Record<ScheduleRole, string>>(emptySelections);
 
   useEffect(() => {
     if (!open) return;
@@ -55,7 +60,7 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
       setEventDate(schedule.eventDate);
       setEventTime(schedule.eventTime);
       setNotes(schedule.notes ?? "");
-      const selections = { fotografia: NONE, filmmaker: NONE, projecao: NONE, transmissao: NONE } as Record<ScheduleRole, string>;
+      const selections = emptySelections();
       schedule.assignments.forEach((a) => {
         selections[a.role] = String(a.volunteerId);
       });
@@ -66,7 +71,7 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
       setEventDate("");
       setEventTime("18:00");
       setNotes("");
-      setRoleSelections({ fotografia: NONE, filmmaker: NONE, projecao: NONE, transmissao: NONE });
+      setRoleSelections(emptySelections());
     }
   }, [open, schedule]);
 
@@ -82,8 +87,14 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
       toast({ title: isEditing ? "Escala atualizada" : "Escala criada" });
       onOpenChange(false);
     },
-    onError: () => {
-      toast({ title: "Erro", description: "Não foi possível salvar a escala.", variant: "destructive" });
+    // A API tem a palavra final sobre o conflito de treinamento; a mensagem dela
+    // é mais útil que um "não foi possível salvar" genérico
+    onError: (err: Error) => {
+      toast({
+        title: "Erro",
+        description: err.message || "Não foi possível salvar a escala.",
+        variant: "destructive",
+      });
     },
   });
 
@@ -117,19 +128,49 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
   const overloadCount = (userId: number) =>
     formMonth ? monthlyLoadOf(monthlyLoad, userId, formMonth) : 0;
 
-  const handleSubmit = () => {
-    if (!title.trim() || !eventDate || !eventTime) {
-      toast({ title: "Campos obrigatórios", description: "Preencha título, data e horário.", variant: "destructive" });
-      return;
-    }
-    const assignments: ScheduleAssignment[] = [];
+  const assignments = useMemo<ScheduleAssignment[]>(() => {
+    const list: ScheduleAssignment[] = [];
     for (const role of SCHEDULE_ROLES) {
       const value = roleSelections[role];
       if (value === NONE) continue;
       const volunteer = volunteers.find((v) => v.id === Number(value));
       if (volunteer) {
-        assignments.push({ role, volunteerId: volunteer.id, volunteerName: volunteer.displayName });
+        list.push({ role, volunteerId: volunteer.id, volunteerName: volunteer.displayName });
       }
+    }
+    return list;
+  }, [roleSelections, volunteers]);
+
+  // Treinamento e função de culto se excluem dentro do período — outra escala do
+  // mesmo dia em outro período não conta. O balanço junta as escalas daquele
+  // período com o que está selecionado aqui; como a seleção da própria função
+  // entra no conjunto dela, ninguém aparece bloqueado para a vaga que já ocupa.
+  const periodRoster = useMemo<PeriodRoster>(() => {
+    const roster: PeriodRoster = eventDate && eventPeriod
+      ? rosterOfPeriod(schedules, eventDate, eventPeriod, schedule?.id)
+      : { training: new Set(), working: new Set() };
+    assignments.forEach((a) => {
+      (isTrainingRole(a.role) ? roster.training : roster.working).add(a.volunteerId);
+    });
+    return roster;
+  }, [schedules, schedule?.id, eventDate, eventPeriod, assignments]);
+
+  // As opções proibidas ficam desabilitadas, mas trocar a data ou o horário
+  // depois de escolher pode criar o conflito — daí o aviso (e a trava no salvar)
+  const conflictMessage = useMemo(() => {
+    if (!eventDate || !eventTime) return null;
+    const sameDay = schedules.filter((s) => s.eventDate === eventDate && s.id !== schedule?.id);
+    return trainingConflictMessage(trainingConflicts([...sameDay, { eventTime, assignments }]));
+  }, [schedules, schedule?.id, eventDate, eventTime, assignments]);
+
+  const handleSubmit = () => {
+    if (!title.trim() || !eventDate || !eventTime) {
+      toast({ title: "Campos obrigatórios", description: "Preencha título, data e horário.", variant: "destructive" });
+      return;
+    }
+    if (conflictMessage) {
+      toast({ title: "Conflito de treinamento", description: conflictMessage, variant: "destructive" });
+      return;
     }
     mutation.mutate({
       title: title.trim(),
@@ -147,7 +188,10 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
         <DialogHeader>
           <DialogTitle>{isEditing ? "Editar escala" : "Nova escala"}</DialogTitle>
           <DialogDescription>
-            Defina o evento e os voluntários de cada função.
+            Defina o evento e os voluntários de cada função. Quem entra em
+            “Em treinamento” acompanha a equipe para aprender e, por isso, não assume
+            nenhuma outra função neste período — mas segue livre nos outros
+            períodos do dia.
           </DialogDescription>
         </DialogHeader>
 
@@ -227,12 +271,16 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
                         // porque o conteúdo do item é reaproveitado no próprio trigger
                         const count = overloadCount(v.id);
                         const unavailablePeriod = unavailableAs(v.id);
+                        // Treinamento e função de culto no mesmo período não se
+                        // juntam: a opção aparece, mas travada e com o motivo à mostra
+                        const blocked = blockedNote(role, v.id, periodRoster);
                         const notes = [
+                          blocked,
                           unavailablePeriod ? UNAVAILABLE_NOTE[unavailablePeriod] : null,
                           count >= OVERLOAD_THRESHOLD ? `${count} escalas neste mês` : null,
                         ].filter(Boolean);
                         return (
-                          <SelectItem key={v.id} value={String(v.id)}>
+                          <SelectItem key={v.id} value={String(v.id)} disabled={!!blocked}>
                             {v.displayName}{notes.length > 0 ? ` (${notes.join(", ")})` : ""}
                           </SelectItem>
                         );
@@ -250,6 +298,16 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
             })}
           </div>
 
+          {conflictMessage && (
+            <div
+              className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3"
+              data-testid="warning-training-conflict"
+            >
+              <AlertTriangle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+              <p className="text-xs text-destructive">{conflictMessage}</p>
+            </div>
+          )}
+
           <div className="space-y-2">
             <Label htmlFor="schedule-notes">Observações (opcional)</Label>
             <Textarea
@@ -265,7 +323,11 @@ export function ScheduleFormDialog({ open, onOpenChange, volunteers, unavailabil
 
         <DialogFooter>
           <Button variant="secondary" onClick={() => onOpenChange(false)}>Cancelar</Button>
-          <Button onClick={handleSubmit} disabled={mutation.isPending} data-testid="button-save-schedule">
+          <Button
+            onClick={handleSubmit}
+            disabled={mutation.isPending || !!conflictMessage}
+            data-testid="button-save-schedule"
+          >
             {mutation.isPending ? "Salvando..." : isEditing ? "Salvar alterações" : "Criar escala"}
           </Button>
         </DialogFooter>

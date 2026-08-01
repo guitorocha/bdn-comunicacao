@@ -5,6 +5,8 @@ import helmet from "helmet";
 import { registerRoutes } from "./routes";
 import { createServer } from "http";
 
+// Entrypoint HTTP. Os lembretes de escala rodam noutra função, a partir de
+// `server/lembretes-handler.ts` — ver ADR-0008.
 let appHandler: ReturnType<typeof serverlessExpress>;
 
 export const handler = async (event: any, context: any) => {
